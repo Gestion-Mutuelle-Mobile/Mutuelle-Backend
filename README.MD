@@ -146,6 +146,38 @@ GET    /api/auth/utilisateurs/me/        # Mon profil
 PATCH  /api/auth/utilisateurs/update_profile/  # Modifier mon profil
 ```
 
+#### exemple :
+
+```javascript
+
+// 1. Se connecter
+const login = async (email, password) => {
+  const response = await fetch('/api/token/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  
+  const { access, refresh } = await response.json();
+  
+  // 2. Récupérer les données utilisateur
+  const userResponse = await fetch('/api/auth/utilisateurs/me/', {
+    headers: { 'Authorization': `Bearer ${access}` }
+  });
+  
+  const userData = await userResponse.json();
+  
+  // 3. Stocker tout
+  localStorage.setItem('access_token', access);
+  localStorage.setItem('refresh_token', refresh);
+  localStorage.setItem('user_data', JSON.stringify(userData));
+  
+  return { access, refresh, user: userData };
+};
+
+```
+
+
 #### Profil et Mot de Passe
 
 ```http
