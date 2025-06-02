@@ -42,7 +42,7 @@ class UtilisateurFilter(filters.FilterSet):
     class Meta:
         model = Utilisateur
         fields = {
-            'email': ['exact', 'icontains', 'istartwith'],
+            'email': ['exact', 'icontains', 'istartswith'],
             'role': ['exact'],
             'is_active': ['exact'],
             'date_creation': ['exact', 'gte', 'lte', 'year', 'month'],

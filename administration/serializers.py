@@ -71,7 +71,7 @@ class CreerMembreCompletSerializer(serializers.Serializer):
     # Données membre
     date_inscription = serializers.DateField(required=False)
     montant_inscription_initial = serializers.DecimalField(
-        max_digits=12, decimal_places=2, required=False, min_value=0
+        max_digits=12, decimal_places=2, required=False, min_value=Decimal('0')  # ✅ CORRIGÉ
     )
     
     def validate_email(self, value):
