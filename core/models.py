@@ -4,6 +4,7 @@ from django.conf import settings
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import Sum, Q
+from Backend.settings import MUTUELLE_DEFAULTS
 
 class ConfigurationMutuelle(models.Model):
     """
@@ -11,27 +12,27 @@ class ConfigurationMutuelle(models.Model):
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     montant_inscription = models.DecimalField(
-        max_digits=12, decimal_places=2, default=150000,
+        max_digits=12, decimal_places=2, default=MUTUELLE_DEFAULTS["INSCRIPTION_AMOUNT"],
         validators=[MinValueValidator(0)],
         verbose_name="Montant inscription (FCFA)"
     )
     montant_solidarite = models.DecimalField(
-        max_digits=12, decimal_places=2, default=10000,
+        max_digits=12, decimal_places=2, default=MUTUELLE_DEFAULTS["SOLIDARITE_AMOUNT"],
         validators=[MinValueValidator(0)],
         verbose_name="Montant solidarité par session (FCFA)"
     )
     taux_interet = models.DecimalField(
-        max_digits=5, decimal_places=2, default=3.0,
+        max_digits=5, decimal_places=2, default=MUTUELLE_DEFAULTS["INTEREST_RATE"],
         validators=[MinValueValidator(0)],
         verbose_name="Taux d'intérêt (%)"
     )
     coefficient_emprunt_max = models.IntegerField(
-        default=5,
+        default=MUTUELLE_DEFAULTS["LOAN_MULTIPLIER"],
         validators=[MinValueValidator(1)],
         verbose_name="Coefficient multiplicateur max pour emprunts"
     )
     duree_exercice_mois = models.IntegerField(
-        default=12,
+        default=MUTUELLE_DEFAULTS["EXERCISE_DURATION_MONTHS"],
         validators=[MinValueValidator(1)],
         verbose_name="Durée exercice (mois)"
     )
