@@ -1,0 +1,2 @@
+# Permissions pour les transactions
+
