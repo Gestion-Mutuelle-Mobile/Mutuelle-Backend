@@ -121,6 +121,7 @@ class ExerciceViewSet(viewsets.ModelViewSet):
         """
         Retourne l'exercice en cours
         """
+        print("RECHERCHE DE L'EXO EN COURS ...")
         exercice = Exercice.get_exercice_en_cours()
         if exercice:
             serializer = self.get_serializer(exercice)

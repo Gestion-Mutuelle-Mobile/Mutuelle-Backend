@@ -5,6 +5,11 @@ import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import Sum, Q
 from Backend.settings import MUTUELLE_DEFAULTS
+from datetime import datetime, timedelta
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+from django.db import models
+import uuid
 
 class ConfigurationMutuelle(models.Model):
     """
@@ -62,13 +67,14 @@ class Exercice(models.Model):
         ('EN_COURS', 'En cours'),
         ('TERMINE', 'Terminé'),
         ('PLANIFIE', 'Planifié'),
+        ('EN_PREPARATION', 'En préparation'),  # ✅ Ajouté pour nouveaux exercices
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    nom = models.CharField(max_length=100, verbose_name="Nom de l'exercice")
-    date_debut = models.DateField(verbose_name="Date de début")
-    date_fin = models.DateField(verbose_name="Date de fin")
-    statut = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PLANIFIE', verbose_name="Statut")
+    nom = models.CharField(max_length=100, verbose_name="Nom de l'exercice", blank=True, null=True)
+    date_debut = models.DateField(verbose_name="Date de début")  # ✅ Retiré auto_now_add
+    date_fin = models.DateField(verbose_name="Date de fin", blank=True, null=True)  # ✅ Peut être nulle
+    statut = models.CharField(max_length=15, choices=STATUS_CHOICES, default='EN_COURS', verbose_name="Statut")  # ✅ Augmenté max_length
     description = models.TextField(blank=True, verbose_name="Description")
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
@@ -77,19 +83,137 @@ class Exercice(models.Model):
         verbose_name = "Exercice"
         verbose_name_plural = "Exercices"
         ordering = ['-date_debut']
-        unique_together = [['date_debut', 'date_fin']]
+        # ✅ Retiré unique_together car date_fin peut être null
+    
+    def save(self, *args, **kwargs):
+        """
+        Calcule automatiquement la date_fin si elle n'est pas fournie
+        """
+        # ✅ Générer le nom automatiquement si pas fourni
+        if not self.nom:
+            year = self.date_debut.year if self.date_debut else datetime.now().year
+            self.nom = f"Exercice {year}"
+        
+        # ✅ Calculer date_fin automatiquement si pas fournie
+        if self.date_debut and not self.date_fin:
+            try:
+                # Récupérer la configuration actuelle
+                config = ConfigurationMutuelle.get_configuration()
+                duree_mois = config.duree_exercice_mois
+                
+                # Calculer date de fin en ajoutant la durée en mois
+                self.date_fin = self.date_debut + relativedelta(months=duree_mois)
+                
+                print(f"✅ Date de fin calculée automatiquement: {self.date_fin} (durée: {duree_mois} mois)")
+                
+            except Exception as e:
+                print(f"❌ Erreur calcul date_fin: {e}")
+                # Fallback: ajouter 12 mois par défaut
+                self.date_fin = self.date_debut + relativedelta(months=12)
+                print(f"🔄 Fallback: date_fin = {self.date_fin} (12 mois par défaut)")
+        
+        super().save(*args, **kwargs)
     
     def __str__(self):
-        return f"{self.nom} ({self.date_debut} - {self.date_fin})"
+        date_fin_str = self.date_fin.strftime("%Y-%m-%d") if self.date_fin else "Non définie"
+        return f"{self.nom} ({self.date_debut} - {date_fin_str})"
     
     @property
     def is_en_cours(self):
         return self.statut == 'EN_COURS'
     
+    @property
+    def duree_totale_jours(self):
+        """Retourne la durée totale en jours"""
+        if self.date_debut and self.date_fin:
+            return (self.date_fin - self.date_debut).days
+        return None
+    
+    @property
+    def duree_totale_mois(self):
+        """Retourne la durée totale en mois (approximative)"""
+        if self.date_debut and self.date_fin:
+            return relativedelta(self.date_fin, self.date_debut).months + \
+                   (relativedelta(self.date_fin, self.date_debut).years * 12)
+        return None
+    
+    @property
+    def progress_percentage(self):
+        """Retourne le pourcentage de progression de l'exercice"""
+        if not self.date_debut or not self.date_fin:
+            return 0
+        
+        today = datetime.now().date()
+        if today < self.date_debut:
+            return 0
+        elif today > self.date_fin:
+            return 100
+        else:
+            total_days = (self.date_fin - self.date_debut).days
+            elapsed_days = (today - self.date_debut).days
+            return round((elapsed_days / total_days) * 100, 1) if total_days > 0 else 0
+    
     @classmethod
     def get_exercice_en_cours(cls):
         """Retourne l'exercice en cours"""
         return cls.objects.filter(statut='EN_COURS').first()
+    
+    @classmethod
+    def get_exercice_actuel(cls):
+        """
+        Retourne l'exercice correspondant à la date actuelle
+        (même s'il n'est pas marqué comme EN_COURS)
+        """
+        today = datetime.now().date()
+        return cls.objects.filter(
+            date_debut__lte=today,
+            date_fin__gte=today
+        ).first()
+    
+    def activate(self):
+        """
+        Active cet exercice (désactive les autres)
+        """
+        if self.can_be_activated():
+            # Désactiver tous les autres exercices
+            Exercice.objects.filter(statut='EN_COURS').update(statut='TERMINE')
+            # Activer celui-ci
+            self.statut = 'EN_COURS'
+            self.save()
+            return True
+        return False
+
+    def clean(self):
+        """
+        Validation personnalisée
+        """
+        from django.core.exceptions import ValidationError
+        
+        # Vérifier que date_debut n'est pas dans le futur lointain
+        if self.date_debut:
+            max_future = datetime.now().date() + relativedelta(years=2)
+            if self.date_debut > max_future:
+                raise ValidationError({
+                    'date_debut': 'La date de début ne peut pas être si éloignée dans le futur.'
+                })
+        
+        # Vérifier cohérence des dates si date_fin est fournie
+        if self.date_debut and self.date_fin:
+            if self.date_fin <= self.date_debut:
+                raise ValidationError({
+                    'date_fin': 'La date de fin doit être postérieure à la date de début.'
+                })
+            
+            # Vérifier durée raisonnable (entre 1 mois et 5 ans)
+            duree_jours = (self.date_fin - self.date_debut).days
+            if duree_jours < 30:  # Moins d'un mois
+                raise ValidationError({
+                    'date_fin': 'La durée de l\'exercice doit être d\'au moins 30 jours.'
+                })
+            elif duree_jours > 1825:  # Plus de 5 ans
+                raise ValidationError({
+                    'date_fin': 'La durée de l\'exercice ne peut pas dépasser 5 ans.'
+                })
 
 class Session(models.Model):
     """
@@ -103,14 +227,14 @@ class Session(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     exercice = models.ForeignKey(Exercice, on_delete=models.CASCADE, related_name='sessions', verbose_name="Exercice")
-    nom = models.CharField(max_length=100, verbose_name="Nom de la session")
+    nom = models.CharField(max_length=100, verbose_name="Nom de la session", blank=True, null=True)
     date_session = models.DateField(verbose_name="Date de la session")
     montant_collation = models.DecimalField(
         max_digits=12, decimal_places=2, default=0,
         validators=[MinValueValidator(0)],
         verbose_name="Montant collation (FCFA)"
     )
-    statut = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PLANIFIEE', verbose_name="Statut")
+    statut = models.CharField(max_length=10, choices=STATUS_CHOICES, default='EN_COURS', verbose_name="Statut")
     description = models.TextField(blank=True, verbose_name="Description")
     date_creation = models.DateTimeField(auto_now_add=True)
     date_modification = models.DateTimeField(auto_now=True)
@@ -139,18 +263,66 @@ class Session(models.Model):
     def get_session_en_cours(cls):
         """Retourne la session en cours"""
         return cls.objects.filter(statut='EN_COURS').first()
+    
     def save(self, *args, **kwargs):
+        """
+        ✅ CORRECTION : Gestion correcte des nouvelles instances et mises à jour
+        """
         old_statut = None
-        if self.pk:
-            old_instance = Session.objects.get(pk=self.pk)
-            old_statut = old_instance.statut
+        is_new = self.pk is None  # ✅ Vérifier si c'est une nouvelle instance
         
+        # ✅ Générer nom automatiquement si pas fourni
+        if not self.nom:
+            if self.date_session:
+                mois_fr = [
+                    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+                    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"
+                ]
+                mois = mois_fr[self.date_session.month - 1]
+                self.nom = f"Session {mois} {self.date_session.year}"
+            else:
+                from django.utils import timezone
+                now = timezone.now()
+                self.nom = f"Session {now.strftime('%B %Y')}"
+        
+        # ✅ Obtenir l'ancien statut SEULEMENT si l'instance existe déjà
+        if not is_new:
+            try:
+                old_instance = Session.objects.get(pk=self.pk)
+                old_statut = old_instance.statut
+            except Session.DoesNotExist:
+                # L'instance a été supprimée entre temps, traiter comme nouvelle
+                is_new = True
+                old_statut = None
+        
+        # ✅ Assigner l'exercice en cours si pas spécifié
+        if not self.exercice_id and not self.exercice:
+            exercice_en_cours = Exercice.get_exercice_en_cours()
+            if exercice_en_cours:
+                self.exercice = exercice_en_cours
+            else:
+                # Créer ou récupérer un exercice par défaut
+                from datetime import date
+                exercice, created = Exercice.objects.get_or_create(
+                    statut='EN_COURS',
+                    defaults={
+                        'nom': f'Exercice {date.today().year}',
+                        'date_debut': date.today(),
+                        'statut': 'EN_COURS'
+                    }
+                )
+                self.exercice = exercice
+        
+        # ✅ Sauvegarder l'instance
         super().save(*args, **kwargs)
         
-        # Traiter la collation quand la session devient EN_COURS
+        # ✅ Traiter la collation seulement si le statut change vers EN_COURS
         if self.statut == 'EN_COURS' and old_statut != 'EN_COURS':
             if self.montant_collation > 0:
-                self._traiter_collation()
+                try:
+                    self._traiter_collation()
+                except Exception as e:
+                    print(f"❌ Erreur traitement collation: {e}")
     
     def _traiter_collation(self):
         """
@@ -158,53 +330,103 @@ class Session(models.Model):
         1. Prélève du fonds social
         2. Crée les renflouements pour tous les membres en règle
         """
-        from django.utils import timezone
+        print(f"🎯 Traitement collation pour session {self.nom}: {self.montant_collation:,.0f} FCFA")
         
-        # 1. PRÉLEVER DU FONDS SOCIAL
-        fonds = FondsSocial.get_fonds_actuel()
-        if not fonds:
-            print("ERREUR: Aucun fonds social actuel trouvé pour la collation")
-            return
-        
-        if not fonds.retirer_montant(
-            self.montant_collation,
-            f"Collation Session {self.nom} - {self.date_session}"
-        ):
-            print(f"ERREUR: Fonds social insuffisant pour la collation de {self.montant_collation:,.0f} FCFA")
-            return
+        # 1. VÉRIFIER ET PRÉLEVER DU FONDS SOCIAL
+        try:
+            # Importer ici pour éviter les imports circulaires
+            from .models import FondsSocial  # Ajuste le chemin selon ta structure
+            
+            fonds = FondsSocial.get_fonds_actuel()
+            if not fonds:
+                print("❌ ERREUR: Aucun fonds social actuel trouvé pour la collation")
+                return False
+            
+            if not fonds.retirer_montant(
+                self.montant_collation,
+                f"Collation Session {self.nom} - {self.date_session}"
+            ):
+                print(f"❌ ERREUR: Fonds social insuffisant pour la collation de {self.montant_collation:,.0f} FCFA")
+                return False
+            
+        except Exception as e:
+            print(f"❌ Erreur lors du prélèvement du fonds social: {e}")
+            return False
         
         # 2. CRÉER LES RENFLOUEMENTS
-        self._creer_renflouement_collation()
-        
-        print(f"Collation payée: {self.montant_collation:,.0f} FCFA prélevés du fonds social")
+        try:
+            success = self._creer_renflouement_collation()
+            if success:
+                print(f"✅ Collation payée: {self.montant_collation:,.0f} FCFA prélevés du fonds social")
+                return True
+            else:
+                print(f"⚠️ Problème lors de la création des renflouements")
+                return False
+        except Exception as e:
+            print(f"❌ Erreur lors de la création des renflouements: {e}")
+            return False
     
     def _creer_renflouement_collation(self):
         """Crée les renflouements pour la collation"""
-        membres_en_regle = Membre.objects.filter(
-            statut='EN_REGLE',
-            date_inscription__lte=self.date_session
-        )
-        
-        nombre_membres = membres_en_regle.count()
-        if nombre_membres == 0:
-            print("ATTENTION: Aucun membre en règle pour le renflouement de collation")
-            return
-        
-        montant_par_membre = (self.montant_collation / nombre_membres).quantize(
-            Decimal('0.01'), rounding=ROUND_HALF_UP
-        )
-        
-        for membre in membres_en_regle:
-            from transactions.models import Renflouement
-            Renflouement.objects.create(
-                membre=membre,
-                session=self,
-                montant_du=montant_par_membre,
-                cause=f"Collation Session {self.nom} - {self.date_session}",
-                type_cause='COLLATION'
+        try:
+            # Importer ici pour éviter les imports circulaires
+            from .models import Membre  # Ajuste selon ta structure
+            from transactions.models import Renflouement  # Ajuste selon ta structure
+            from decimal import Decimal, ROUND_HALF_UP
+            
+            membres_en_regle = Membre.objects.filter(
+                statut='EN_REGLE',
+                date_inscription__lte=self.date_session
             )
+            
+            nombre_membres = membres_en_regle.count()
+            if nombre_membres == 0:
+                print("⚠️ ATTENTION: Aucun membre en règle pour le renflouement de collation")
+                return False
+            
+            montant_par_membre = (Decimal(str(self.montant_collation)) / nombre_membres).quantize(
+                Decimal('0.01'), rounding=ROUND_HALF_UP
+            )
+            
+            renflouements_crees = 0
+            for membre in membres_en_regle:
+                try:
+                    renflouement, created = Renflouement.objects.get_or_create(
+                        membre=membre,
+                        session=self,
+                        type_cause='COLLATION',
+                        defaults={
+                            'montant_du': montant_par_membre,
+                            'cause': f"Collation Session {self.nom} - {self.date_session}",
+                        }
+                    )
+                    if created:
+                        renflouements_crees += 1
+                except Exception as e:
+                    print(f"❌ Erreur création renflouement pour {membre}: {e}")
+            
+            print(f"✅ Renflouement collation: {renflouements_crees}/{nombre_membres} créés - {montant_par_membre:,.0f} FCFA chacun")
+            return renflouements_crees > 0
+            
+        except Exception as e:
+            print(f"❌ Erreur dans _creer_renflouement_collation: {e}")
+            return False
+    
+    def clean(self):
+        """Validation personnalisée"""
+        from django.core.exceptions import ValidationError
         
-        print(f"Renflouement collation créé: {nombre_membres} membres - {montant_par_membre:,.0f} FCFA chacun")
+        # Vérifier qu'il n'y a pas déjà une session EN_COURS pour cet exercice
+        if self.statut == 'EN_COURS' and self.exercice:
+            existing = Session.objects.filter(
+                exercice=self.exercice,
+                statut='EN_COURS'
+            ).exclude(pk=self.pk).first()
+            
+            if existing:
+                raise ValidationError({
+                    'statut': f'Il y a déjà une session en cours pour cet exercice: {existing.nom}'
+                })
 
 class TypeAssistance(models.Model):
     """
