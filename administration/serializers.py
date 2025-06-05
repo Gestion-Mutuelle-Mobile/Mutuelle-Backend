@@ -15,6 +15,7 @@ class DashboardAdministrateurSerializer(serializers.Serializer):
     alertes = serializers.ListField()
     activite_recente = serializers.DictField()
     membres_problematiques = serializers.ListField()
+    renflouements=serializers.DictField()
 
 class GestionMembreSerializer(serializers.Serializer):
     """

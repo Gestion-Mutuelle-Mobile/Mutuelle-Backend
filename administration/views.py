@@ -44,7 +44,29 @@ class AdministrationDashboardViewSet(viewsets.ViewSet):
             'activite_recente': self._get_activite_recente(),
             'membres_problematiques': self._get_membres_problematiques()
         })
-        
+        # Calculer les stats de renflouement
+        def _get_renflouements_stats():
+            print("CALCUL DES REMFLOUEMENTS")
+            
+            qs = Renflouement.objects.all()
+            total_du = qs.aggregate(total=Sum('montant_du'))['total'] or Decimal('0')
+            total_paye = qs.aggregate(total=Sum('montant_paye'))['total'] or Decimal('0')
+            taux_recouvrement = float(total_paye) / float(total_du) * 100 if total_du > 0 else 100
+            
+            data = {
+                "montants": {
+                    "total_du": float(total_du),
+                    "total_paye": float(total_paye),
+                },
+                "pourcentages": {
+                    "taux_recouvrement": round(taux_recouvrement, 2)
+                }
+            }
+            print(data)
+
+            return data
+        donnees['renflouements'] = _get_renflouements_stats()
+                
         serializer = DashboardAdministrateurSerializer(donnees)
         return Response(serializer.data)
     
