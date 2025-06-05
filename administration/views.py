@@ -492,8 +492,10 @@ class GestionMembresViewSet(viewsets.ViewSet):
             serializer = CreerMembreCompletSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             with transaction.atomic():
-                # 1. Créer l'utilisateur
-                utilisateur_data = {
+                
+                
+                if serializer.validated_data.get('photo_profil'):
+                    utilisateur_data = {
                     'username': serializer.validated_data['username'],
                     'email': serializer.validated_data['email'],
                     'first_name': serializer.validated_data['first_name'],
@@ -501,7 +503,17 @@ class GestionMembresViewSet(viewsets.ViewSet):
                     'telephone': serializer.validated_data['telephone'],
                     'role': 'MEMBRE',
                     'photo_profil': serializer.validated_data.get('photo_profil')
-                }
+                    }
+                else:
+                    # 1. Créer l'utilisateur
+                    utilisateur_data = {
+                        'username': serializer.validated_data['username'],
+                        'email': serializer.validated_data['email'],
+                        'first_name': serializer.validated_data['first_name'],
+                        'last_name': serializer.validated_data['last_name'],
+                        'telephone': serializer.validated_data['telephone'],
+                        'role': 'MEMBRE'
+                    }
                 
                 
                 utilisateur = Utilisateur.objects.create_user(
