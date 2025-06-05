@@ -360,6 +360,8 @@ class MembreViewSet(viewsets.ModelViewSet):
             'pourcentage_en_regle': (en_regle / total * 100) if total > 0 else 0
         })
 
+
+
 class TypeAssistanceViewSet(viewsets.ModelViewSet):
     """
     ViewSet pour les types d'assistance

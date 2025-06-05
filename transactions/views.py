@@ -124,6 +124,8 @@ class PaiementInscriptionViewSet(viewsets.ModelViewSet):
     ordering = ['-date_paiement']
     permission_classes = [AllowAny]
 
+
+
 class PaiementSolidariteFilter(filters.FilterSet):
     """
     Filtres pour les paiements de solidarité

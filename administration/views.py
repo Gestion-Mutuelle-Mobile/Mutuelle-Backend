@@ -474,6 +474,98 @@ class GestionMembresViewSet(viewsets.ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    # Ajouter cette méthode dans la classe GestionMembresViewSet
+
+    @action(detail=False, methods=['post'])
+    def creer_membre_complet(self, request):
+        """
+        Créer un membre complet (utilisateur + membre) en une seule fois
+        """
+        print("*****************REQUETE DE CREATION DE MEMEBRE***************************")
+        print(request.data)
+        print("****************************************************************************")
+        
+        
+        
+        
+        try:
+            serializer = CreerMembreCompletSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            with transaction.atomic():
+                # 1. Créer l'utilisateur
+                utilisateur_data = {
+                    'username': serializer.validated_data['username'],
+                    'email': serializer.validated_data['email'],
+                    'first_name': serializer.validated_data['first_name'],
+                    'last_name': serializer.validated_data['last_name'],
+                    'telephone': serializer.validated_data['telephone'],
+                    'role': 'MEMBRE',
+                    'photo_profil': serializer.validated_data.get('photo_profil')
+                }
+                
+                
+                utilisateur = Utilisateur.objects.create_user(
+                    password=serializer.validated_data.get('password', '000000'),
+                    **utilisateur_data
+                )
+                
+                # 2. Créer le membre
+                exercice_actuel = Exercice.get_exercice_en_cours()
+                session_actuelle = Session.get_session_en_cours()
+                
+                if not exercice_actuel:
+                    print("Aucun exercice en cours pour l\'inscription")
+                    return Response(
+                        {'error': 'Aucun exercice en cours pour l\'inscription'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                if not session_actuelle:
+                    print("Aucune session en cours pour l\'inscription")
+                    return Response(
+                        {'error': 'Aucune session en cours pour l\'inscription'}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                membre = Membre.objects.create(
+                    utilisateur=utilisateur,
+                    date_inscription=serializer.validated_data.get('date_inscription', timezone.now().date()),
+                    exercice_inscription=exercice_actuel,
+                    session_inscription=session_actuelle,
+                    statut='NON_EN_REGLE'  # Par défaut
+                )
+                
+                # 3. Optionnel : ajouter un paiement d'inscription initial
+                montant_initial = serializer.validated_data.get('montant_inscription_initial')
+                if montant_initial and montant_initial > 0:
+                    PaiementInscription.objects.create(
+                        membre=membre,
+                        montant=montant_initial,
+                        session=session_actuelle,
+                        notes="Paiement initial lors de la création"
+                    )
+                    
+                    # Vérifier si inscription complète
+                    config = ConfigurationMutuelle.get_configuration()
+                    if montant_initial >= config.montant_inscription:
+                        membre.statut = 'EN_REGLE'
+                        membre.save()
+                
+                return Response({
+                    'message': 'Membre créé avec succès',
+                    'utilisateur_id': str(utilisateur.id),
+                    'membre_id': str(membre.id),
+                    'numero_membre': membre.numero_membre,
+                    'statut': membre.statut
+                }, status=status.HTTP_201_CREATED)
+                
+        except Exception as e:
+            return Response(
+                {'error': str(e)}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class RapportsViewSet(viewsets.ViewSet):
     """
     ViewSet pour les rapports administrateur
@@ -590,84 +682,3 @@ class RapportsViewSet(viewsets.ViewSet):
         return float((total_paye / total_du) * 100)
     
     
-# Ajouter cette méthode dans la classe GestionMembresViewSet
-
-@action(detail=False, methods=['post'])
-def creer_membre_complet(self, request):
-    """
-    Créer un membre complet (utilisateur + membre) en une seule fois
-    """
-    serializer = CreerMembreCompletSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    
-    try:
-        with transaction.atomic():
-            # 1. Créer l'utilisateur
-            utilisateur_data = {
-                'username': serializer.validated_data['username'],
-                'email': serializer.validated_data['email'],
-                'first_name': serializer.validated_data['first_name'],
-                'last_name': serializer.validated_data['last_name'],
-                'telephone': serializer.validated_data['telephone'],
-                'role': 'MEMBRE',
-                'photo_profil': serializer.validated_data.get('photo_profil')
-            }
-            
-            utilisateur = Utilisateur.objects.create_user(
-                password=serializer.validated_data.get('password', 'motdepasse123'),
-                **utilisateur_data
-            )
-            
-            # 2. Créer le membre
-            exercice_actuel = Exercice.get_exercice_en_cours()
-            session_actuelle = Session.get_session_en_cours()
-            
-            if not exercice_actuel:
-                return Response(
-                    {'error': 'Aucun exercice en cours pour l\'inscription'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            if not session_actuelle:
-                return Response(
-                    {'error': 'Aucune session en cours pour l\'inscription'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            membre = Membre.objects.create(
-                utilisateur=utilisateur,
-                date_inscription=serializer.validated_data.get('date_inscription', timezone.now().date()),
-                exercice_inscription=exercice_actuel,
-                session_inscription=session_actuelle,
-                statut='NON_EN_REGLE'  # Par défaut
-            )
-            
-            # 3. Optionnel : ajouter un paiement d'inscription initial
-            montant_initial = serializer.validated_data.get('montant_inscription_initial')
-            if montant_initial and montant_initial > 0:
-                PaiementInscription.objects.create(
-                    membre=membre,
-                    montant=montant_initial,
-                    session=session_actuelle,
-                    notes="Paiement initial lors de la création"
-                )
-                
-                # Vérifier si inscription complète
-                config = ConfigurationMutuelle.get_configuration()
-                if montant_initial >= config.montant_inscription:
-                    membre.statut = 'EN_REGLE'
-                    membre.save()
-            
-            return Response({
-                'message': 'Membre créé avec succès',
-                'utilisateur_id': str(utilisateur.id),
-                'membre_id': str(membre.id),
-                'numero_membre': membre.numero_membre,
-                'statut': membre.statut
-            }, status=status.HTTP_201_CREATED)
-            
-    except Exception as e:
-        return Response(
-            {'error': str(e)}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )

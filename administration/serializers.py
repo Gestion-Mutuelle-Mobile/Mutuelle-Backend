@@ -63,9 +63,9 @@ class CreerMembreCompletSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
     email = serializers.EmailField()
     first_name = serializers.CharField(max_length=30)
-    last_name = serializers.CharField(max_length=30)
+    last_name = serializers.CharField(max_length=50)
     telephone = serializers.CharField(max_length=15)
-    password = serializers.CharField(required=False, default='motdepasse123')
+    password = serializers.CharField(required=False, default='0000')
     photo_profil = serializers.ImageField(required=False)
     
     # Données membre
@@ -76,10 +76,13 @@ class CreerMembreCompletSerializer(serializers.Serializer):
     
     def validate_email(self, value):
         if Utilisateur.objects.filter(email=value).exists():
+            print("Un utilisateur avec cet email existe déjà")
             raise serializers.ValidationError("Un utilisateur avec cet email existe déjà")
+            
         return value
     
     def validate_username(self, value):
         if Utilisateur.objects.filter(username=value).exists():
+            print("Un utilisateur avec ce nom d'utilisateur existe déjà")
             raise serializers.ValidationError("Un utilisateur avec ce nom d'utilisateur existe déjà")
         return value
