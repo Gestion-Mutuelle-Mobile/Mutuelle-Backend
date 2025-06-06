@@ -70,6 +70,14 @@ class PaiementSolidarite(models.Model):
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
+        try:
+            if self.membre.calculer_statut_en_regle() :
+                self.membre.statut = 'EN_REGLE'
+                self.membre.save()
+        except :
+            print(f"Erreur de calcul de sttus en regle  ")
+            pass
+        
         # Alimenter le fonds social à chaque paiement de solidarité
         if is_new:
             from core.models import FondsSocial
@@ -225,11 +233,20 @@ class Remboursement(models.Model):
         
         super().save(*args, **kwargs)
         
+        
+        
         # Mise à jour du montant remboursé de l'emprunt
         self.emprunt.montant_rembourse = sum(
             r.montant for r in self.emprunt.remboursements.all()
         )
         self.emprunt.save()
+        try:
+            if self.emprunt.membre.calculer_statut_en_regle() :
+                self.emprunt.membre.statut = 'EN_REGLE'
+                self.emprunt.membre.save()
+        except :
+            print(f"Erreur de calcul de sttus en regle  ")
+            pass
         
         # Redistribution des intérêts aux membres
         if self.montant_interet > 0:
@@ -497,6 +514,14 @@ class PaiementRenflouement(models.Model):
             p.montant for p in self.renflouement.paiements.all()
         )
         self.renflouement.save()
+        try:
+            if self.renflouement.membre.calculer_statut_en_regle() :
+                self.renflouement.membre.statut = 'EN_REGLE'
+                self.renflouement.membre.save()
+        except :
+            print(f"Erreur de calcul de sttus en regle  ")
+            pass
+        
         
         # CRUCIAL: Alimenter le fonds social avec le paiement de renflouement
         if is_new:
