@@ -320,26 +320,35 @@ class AssistanceAccordee(models.Model):
     
     def save(self, *args, **kwargs):
         old_statut = None
-        if self.pk:
-            old_instance = AssistanceAccordee.objects.get(pk=self.pk)
-            old_statut = old_instance.statut
+        is_new = self.pk is None
+        
+        # 🔧 RÉCUPÉRER L'ANCIEN STATUT SEULEMENT SI MODIFICATION
+        if not is_new:
+            try:
+                old_instance = AssistanceAccordee.objects.get(pk=self.pk)
+                old_statut = old_instance.statut
+            except AssistanceAccordee.DoesNotExist:
+                # Cas rare où l'objet a été supprimé entre temps
+                is_new = True
         
         # Copier le montant du type d'assistance si pas défini
-        if not self.montant:
+        if not self.montant and self.type_assistance:
             self.montant = self.type_assistance.montant
         
+        # Sauvegarder
         super().save(*args, **kwargs)
         
-        # Déclencher le processus quand le statut passe à PAYEE
-        # if self.statut == 'PAYEE' and old_statut != 'PAYEE':
-        #     if not hasattr(self, '_assistance_payee_traitee'):
-        #         self._traiter_paiement_assistance()
-        #         self._assistance_payee_traitee = True
-        if True:
-            if not hasattr(self, '_assistance_payee_traitee'):
-                self._traiter_paiement_assistance()
-                self._assistance_payee_traitee = True
-    
+        # Traiter le paiement si nécessaire
+        should_process = (
+            self.statut == 'PAYEE' and 
+            (is_new or old_statut != 'PAYEE') and
+            not hasattr(self, '_assistance_payee_traitee')
+        )
+        
+        if should_process:
+            self._traiter_paiement_assistance()
+            self._assistance_payee_traitee = True
+        
     def _traiter_paiement_assistance(self):
         """
         Traite le paiement d'une assistance:

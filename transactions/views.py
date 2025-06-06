@@ -9,6 +9,10 @@ from decimal import Decimal
 import logging
 from rest_framework.response import Response
 from rest_framework import status
+from django.db import models, transaction
+
+
+from core.models import Membre, TypeAssistance
 from .models import (
     PaiementInscription, PaiementSolidarite, EpargneTransaction,
     Emprunt, Remboursement, AssistanceAccordee, Renflouement,
@@ -619,7 +623,6 @@ class RemboursementViewSet(viewsets.ModelViewSet):
 
 logger = logging.getLogger(__name__)
 
-
 class AssistanceAccordeeViewSet(viewsets.ModelViewSet):
     queryset = AssistanceAccordee.objects.select_related(
         'membre__utilisateur', 'type_assistance', 'session'
@@ -631,13 +634,13 @@ class AssistanceAccordeeViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
 
     def create(self, request, *args, **kwargs):
-        print("ASSISTANCE CREATE - Data reçue:", request.data)  # Évite l'emoji pour l'encodage
+        print("ASSISTANCE CREATE - Data reçue:", request.data)
         
         # 🔧 AUTO-AJOUTER LA SESSION COURANTE SI MANQUANTE
         data = request.data.copy()
         if 'session' not in data or not data['session']:
             try:
-                from core.models import Session  # Adapte selon ton import
+                from core.models import Session
                 current_session = Session.objects.filter(statut='EN_COURS').first()
                 if current_session:
                     data['session'] = current_session.id
@@ -650,6 +653,26 @@ class AssistanceAccordeeViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 print(f"ERREUR lors de la récupération de session: {e}")
         
+        # 🔍 VÉRIFICATION DES FOREIGN KEYS AVANT CRÉATION
+        try:
+            print(f"🔍 Vérification membre ID: {data.get('membre')}")
+            membre = Membre.objects.get(id=data.get('membre'))
+            print(f"✅ Membre trouvé: {membre}")
+            
+            print(f"🔍 Vérification type_assistance ID: {data.get('type_assistance')}")
+            type_assistance = TypeAssistance.objects.get(id=data.get('type_assistance'))
+            print(f"✅ Type assistance trouvé: {type_assistance}")
+            
+            print(f"🔍 Vérification session ID: {data.get('session')}")
+            session = Session.objects.get(id=data.get('session'))
+            print(f"✅ Session trouvée: {session}")
+            
+        except Exception as e:
+            print(f"❌ ERREUR Foreign Key: {e}")
+            return Response({
+                'error': f'Objet non trouvé: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         serializer = self.get_serializer(data=data)
         if not serializer.is_valid():
             print("ASSISTANCE ERRORS:", serializer.errors)
@@ -659,16 +682,32 @@ class AssistanceAccordeeViewSet(viewsets.ModelViewSet):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            self.perform_create(serializer)
-            print("ASSISTANCE CREATED:", serializer.data)
+            print("🔍 Début de la création...")
+            
+            # 🔧 UTILISE UNE TRANSACTION POUR ISOLER L'ERREUR
+            with transaction.atomic():
+                print("🔍 Appel perform_create...")
+                assistance = serializer.save()
+                print(f"✅ AssistanceAccordee créée avec ID: {assistance.id}")
+                
+                # 🔍 VÉRIFICATION POST-CRÉATION
+                print("🔍 Vérification post-création...")
+                created_assistance = AssistanceAccordee.objects.get(id=assistance.id)
+                print(f"✅ Assistance vérifiée: {created_assistance}")
+                
+            print("✅ ASSISTANCE CREATED:", serializer.data)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
         except Exception as e:
-            print(f"ASSISTANCE EXCEPTION: {str(e)}")
+            print(f"❌ ASSISTANCE EXCEPTION: {str(e)}")
+            print(f"❌ EXCEPTION TYPE: {type(e)}")
+            import traceback
+            print(f"❌ TRACEBACK: {traceback.format_exc()}")
+            
             return Response({
                 'error': 'Erreur lors de la création',
                 'details': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 class PaiementRenflouementViewSet(viewsets.ModelViewSet):
     queryset = PaiementRenflouement.objects.select_related(
         'renflouement__membre__utilisateur', 'session'
