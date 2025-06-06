@@ -13,6 +13,14 @@ from django.db import models, transaction
 import logging
 from rest_framework.response import Response
 from rest_framework import status
+import logging
+from decimal import Decimal, InvalidOperation
+from django.db import transaction
+from django.utils import timezone
+from rest_framework.response import Response
+from rest_framework import status
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -418,6 +426,8 @@ class EmpruntFilter(filters.FilterSet):
             return queryset.filter(date_emprunt__year=timezone.now().year)
         return queryset
 
+
+
 class EmpruntViewSet(viewsets.ModelViewSet):
     """
     ViewSet pour les emprunts avec TOUS LES CALCULS
@@ -437,43 +447,339 @@ class EmpruntViewSet(viewsets.ModelViewSet):
     ]
     ordering = ['-date_emprunt']
     permission_classes = [AllowAny]
-    
+
+    def create(self, request, *args, **kwargs):
+        print("=" * 80)
+        print("🔍 CRÉATION EMPRUNT - DÉBUT")
+        print(f"📡 User: {request.user}")
+        print(f"📡 Data reçue: {request.data}")
+        print(f"📡 Headers: {dict(request.headers)}")
+        print(f"📡 Method: {request.method}")
+        
+        try:
+            # 🔧 VALIDATION DES DONNÉES D'ENTRÉE
+            data = request.data.copy()
+            
+            # Vérifier les champs obligatoires
+            required_fields = ['membre', 'montant_emprunte']
+            missing_fields = []
+            
+            for field in required_fields:
+                if field not in data or not data.get(field):
+                    missing_fields.append(field)
+            
+            if missing_fields:
+                error_msg = f"Champs obligatoires manquants: {', '.join(missing_fields)}"
+                print(f"❌ ERREUR VALIDATION: {error_msg}")
+                return Response({
+                    'error': 'Données manquantes',
+                    'details': error_msg,
+                    'missing_fields': missing_fields,
+                    'data_received': data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 🔧 VALIDATION DU MEMBRE
+            membre_id = data.get('membre')
+            print(f"🔍 Vérification membre ID: {membre_id}")
+            
+            try:
+                from core.models import Membre
+                membre = Membre.objects.select_related('utilisateur').get(id=membre_id)
+                print(f"✅ Membre trouvé: {membre.numero_membre} - {membre.utilisateur.nom_complet}")
+                print(f"   - Statut: {membre.statut}")
+                print(f"   - En règle: {membre.is_en_regle}")
+                
+                # Vérifier si le membre peut emprunter
+                if membre.statut != 'EN_REGLE':
+                    error_msg = f"Le membre {membre.numero_membre} n'est pas en règle (statut: {membre.statut})"
+                    print(f"❌ ERREUR MEMBRE: {error_msg}")
+                    return Response({
+                        'error': 'Membre non éligible',
+                        'details': error_msg,
+                        'membre_statut': membre.statut
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Vérifier s'il a déjà un emprunt en cours
+                emprunt_en_cours = Emprunt.objects.filter(
+                    membre=membre, 
+                    statut__in=['EN_COURS', 'EN_RETARD']
+                ).exists()
+                
+                if emprunt_en_cours:
+                    error_msg = f"Le membre {membre.numero_membre} a déjà un emprunt en cours"
+                    print(f"❌ ERREUR EMPRUNT EN COURS: {error_msg}")
+                    return Response({
+                        'error': 'Emprunt déjà en cours',
+                        'details': error_msg
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+            except Membre.DoesNotExist:
+                error_msg = f"Membre avec ID {membre_id} introuvable"
+                print(f"❌ ERREUR MEMBRE: {error_msg}")
+                return Response({
+                    'error': 'Membre non trouvé',
+                    'details': error_msg,
+                    'membre_id': membre_id
+                }, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                print(f"❌ ERREUR RÉCUPÉRATION MEMBRE: {str(e)}")
+                return Response({
+                    'error': 'Erreur lors de la vérification du membre',
+                    'details': str(e)
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 🔧 VALIDATION DU MONTANT
+            montant_str = data.get('montant_emprunte')
+            print(f"🔍 Validation montant: {montant_str} (type: {type(montant_str)})")
+            
+            try:
+                montant_emprunte = Decimal(str(montant_str))
+                print(f"✅ Montant converti: {montant_emprunte}")
+                
+                if montant_emprunte <= 0:
+                    error_msg = "Le montant doit être positif"
+                    print(f"❌ ERREUR MONTANT: {error_msg}")
+                    return Response({
+                        'error': 'Montant invalide',
+                        'details': error_msg,
+                        'montant_recu': montant_str
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+            
+                
+            except (InvalidOperation, TypeError, ValueError) as e:
+                error_msg = f"Montant invalide: {e}"
+                print(f"❌ ERREUR CONVERSION MONTANT: {error_msg}")
+                return Response({
+                    'error': 'Montant invalide',
+                    'details': error_msg,
+                    'montant_recu': montant_str
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # 🔧 VALIDATION DE LA SESSION
+            session_id = data.get('session')
+            if not session_id:
+                # Auto-assigner la session courante
+                from core.models import Session
+                current_session = Session.objects.filter(statut='EN_COURS').first()
+                if current_session:
+                    data['session'] = current_session.id
+                    print(f"✅ Session auto-assignée: {current_session.nom}")
+                else:
+                    error_msg = "Aucune session active disponible"
+                    print(f"❌ ERREUR SESSION: {error_msg}")
+                    return Response({
+                        'error': 'Session manquante',
+                        'details': error_msg
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                try:
+                    from core.models import Session
+                    session = Session.objects.get(id=session_id)
+                    print(f"✅ Session trouvée: {session.nom}")
+                except Session.DoesNotExist:
+                    error_msg = f"Session avec ID {session_id} introuvable"
+                    print(f"❌ ERREUR SESSION: {error_msg}")
+                    return Response({
+                        'error': 'Session non trouvée',
+                        'details': error_msg,
+                        'session_id': session_id
+                    }, status=status.HTTP_404_NOT_FOUND)
+            
+            # 🔧 VÉRIFICATION DES LIQUIDITÉS
+            try:
+                from core.models import FondsSocial
+                fonds = FondsSocial.get_fonds_actuel()
+                if fonds:
+                    liquidites_disponibles = fonds.montant_total
+                    print(f"🔍 Liquidités disponibles: {liquidites_disponibles}")
+                    
+                    if montant_emprunte > liquidites_disponibles:
+                        error_msg = f"Liquidités insuffisantes ({liquidites_disponibles}) pour ce prêt ({montant_emprunte})"
+                        print(f"⚠️ ATTENTION LIQUIDITÉS: {error_msg}")
+                        # Note: On peut continuer mais alerter l'admin
+                else:
+                    print("⚠️ Aucun fonds social trouvé")
+            except Exception as e:
+                print(f"⚠️ Erreur vérification liquidités: {e}")
+            
+            # 🔧 VALIDATION AVEC SERIALIZER
+            print(f"🔍 Data finale pour serializer: {data}")
+            serializer = self.get_serializer(data=data)
+            
+            print(f"🔍 Validation du serializer...")
+            if not serializer.is_valid():
+                print(f"❌ ERREURS SERIALIZER: {serializer.errors}")
+                print(f"❌ ERREURS DÉTAILLÉES:")
+                for field, errors in serializer.errors.items():
+                    print(f"   - {field}: {errors}")
+                
+                return Response({
+                    'error': 'Données invalides',
+                    'details': serializer.errors,
+                    'data_received': data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            print(f"✅ Serializer valide, validated_data: {serializer.validated_data}")
+            
+            # 🔧 CRÉATION AVEC TRANSACTION
+            try:
+                print("🔍 Début de la création...")
+                
+                with transaction.atomic():
+                    print("🔍 Appel perform_create...")
+                    self.perform_create(serializer)
+                    
+                    emprunt = serializer.instance
+                    print(f"✅ Emprunt créé avec succès:")
+                    print(f"   - ID: {emprunt.id}")
+                    print(f"   - Membre: {emprunt.membre.numero_membre}")
+                    print(f"   - Montant: {emprunt.montant_emprunte}")
+                    print(f"   - Total à rembourser: {emprunt.montant_total_a_rembourser}")
+                    print(f"   - Taux intérêt: {emprunt.taux_interet}%")
+                    print(f"   - Session: {emprunt.session_emprunt.nom}")
+                    print(f"   - Date: {emprunt.date_emprunt}")
+                    print(f"   - Statut: {emprunt.statut}")
+                
+                print("✅ EMPRUNT CRÉÉ AVEC SUCCÈS")
+                print("=" * 80)
+                
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                
+            except Exception as e:
+                print(f"❌ EXCEPTION CRÉATION: {str(e)}")
+                print(f"❌ EXCEPTION TYPE: {type(e)}")
+                import traceback
+                print(f"❌ TRACEBACK COMPLET:")
+                print(traceback.format_exc())
+                print("=" * 80)
+                
+                return Response({
+                    'error': 'Erreur lors de la création de l\'emprunt',
+                    'details': str(e),
+                    'type': str(type(e))
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+        except Exception as e:
+            print(f"❌ EXCEPTION GÉNÉRALE: {str(e)}")
+            print(f"❌ EXCEPTION TYPE: {type(e)}")
+            import traceback
+            print(f"❌ TRACEBACK COMPLET:")
+            print(traceback.format_exc())
+            print("=" * 80)
+            
+            return Response({
+                'error': 'Erreur interne du serveur',
+                'details': str(e),
+                'type': str(type(e))
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def perform_create(self, serializer):
+        """Création personnalisée avec calculs automatiques"""
+        print("🔍 PERFORM_CREATE - Début")
+        try:
+            validated_data = serializer.validated_data
+            
+            # Auto-assigner la date si manquante
+            if 'date_emprunt' not in validated_data:
+                validated_data['date_emprunt'] = timezone.now().date()
+                print(f"✅ Date auto-assignée: {validated_data['date_emprunt']}")
+            
+            # 🔧 AUTO-CALCUL DU TAUX D'INTÉRÊT
+            if 'taux_interet' not in validated_data or not validated_data.get('taux_interet'):
+                from core.models import ConfigurationMutuelle
+                config = ConfigurationMutuelle.get_configuration()
+                validated_data['taux_interet'] = config.taux_interet
+                print(f"✅ Taux d'intérêt auto-assigné: {config.taux_interet}%")
+            
+            # 🔧 AUTO-CALCUL DU MONTANT TOTAL À REMBOURSER
+            if 'montant_total_a_rembourser' not in validated_data or not validated_data.get('montant_total_a_rembourser'):
+                montant_emprunte = validated_data['montant_emprunte']
+                taux_interet = validated_data['taux_interet']
+                
+                # Calcul : montant + (montant * taux / 100)
+                montant_interets = montant_emprunte * (taux_interet / Decimal('100'))
+                montant_total = montant_emprunte + montant_interets
+                
+                validated_data['montant_total_a_rembourser'] = montant_total
+                print(f"✅ Montant total calculé: {montant_emprunte} + {montant_interets} = {montant_total}")
+            
+            # 🔧 AUTO-ASSIGNATION DE LA SESSION
+            if 'session_emprunt' not in validated_data or not validated_data.get('session_emprunt'):
+                from core.models import Session
+                current_session = Session.objects.filter(statut='EN_COURS').first()
+                if current_session:
+                    validated_data['session_emprunt'] = current_session
+                    print(f"✅ Session auto-assignée: {current_session.nom}")
+                else:
+                    raise ValueError("Aucune session en cours disponible")
+            
+            print(f"🔍 Données finales pour création: {validated_data}")
+            
+            # Sauvegarder avec les données calculées
+            instance = serializer.save(**validated_data)
+            print(f"✅ PERFORM_CREATE - Instance sauvée: {instance}")
+            return instance
+            
+        except Exception as e:
+            print(f"❌ PERFORM_CREATE - Erreur: {e}")
+            import traceback
+            print(f"❌ PERFORM_CREATE - Traceback: {traceback.format_exc()}")
+            raise
+
     @action(detail=False, methods=['get'], permission_classes=[AllowAny])
     def statistiques(self, request):
         """
-        Statistiques des emprunts
+        Statistiques des emprunts avec gestion d'erreurs
         """
-        queryset = self.get_queryset()
-        
-        total_emprunts = queryset.count()
-        emprunts_en_cours = queryset.filter(statut='EN_COURS').count()
-        emprunts_rembourses = queryset.filter(statut='REMBOURSE').count()
-        emprunts_en_retard = queryset.filter(statut='EN_RETARD').count()
-        
-        montant_total_emprunte = queryset.aggregate(
-            total=Sum('montant_emprunte'))['total'] or Decimal('0')
-        montant_total_a_rembourser = queryset.aggregate(
-            total=Sum('montant_total_a_rembourser'))['total'] or Decimal('0')
-        montant_total_rembourse = queryset.aggregate(
-            total=Sum('montant_rembourse'))['total'] or Decimal('0')
-        
-        return Response({
-            'nombre_emprunts': {
-                'total': total_emprunts,
-                'en_cours': emprunts_en_cours,
-                'rembourses': emprunts_rembourses,
-                'en_retard': emprunts_en_retard
-            },
-            'montants': {
-                'total_emprunte': montant_total_emprunte,
-                'total_a_rembourser': montant_total_a_rembourser,
-                'total_rembourse': montant_total_rembourse,
-                'solde_restant': montant_total_a_rembourser - montant_total_rembourse
-            },
-            'pourcentages': {
-                'taux_remboursement_global': (montant_total_rembourse / montant_total_a_rembourser * 100) if montant_total_a_rembourser > 0 else 0
-            }
-        })
+        print("🔍 STATISTIQUES EMPRUNTS - Début")
+        try:
+            queryset = self.get_queryset()
+            
+            total_emprunts = queryset.count()
+            emprunts_en_cours = queryset.filter(statut='EN_COURS').count()
+            emprunts_rembourses = queryset.filter(statut='REMBOURSE').count()
+            emprunts_en_retard = queryset.filter(statut='EN_RETARD').count()
+            
+            montant_total_emprunte = queryset.aggregate(
+                total=Sum('montant_emprunte'))['total'] or Decimal('0')
+            montant_total_a_rembourser = queryset.aggregate(
+                total=Sum('montant_total_a_rembourser'))['total'] or Decimal('0')
+            montant_total_rembourse = queryset.aggregate(
+                total=Sum('montant_rembourse'))['total'] or Decimal('0')
+            
+            print(f"✅ Statistiques calculées:")
+            print(f"   - Total emprunts: {total_emprunts}")
+            print(f"   - En cours: {emprunts_en_cours}")
+            print(f"   - Remboursés: {emprunts_rembourses}")
+            print(f"   - En retard: {emprunts_en_retard}")
+            
+            return Response({
+                'nombre_emprunts': {
+                    'total': total_emprunts,
+                    'en_cours': emprunts_en_cours,
+                    'rembourses': emprunts_rembourses,
+                    'en_retard': emprunts_en_retard
+                },
+                'montants': {
+                    'total_emprunte': montant_total_emprunte,
+                    'total_a_rembourser': montant_total_a_rembourser,
+                    'total_rembourse': montant_total_rembourse,
+                    'solde_restant': montant_total_a_rembourser - montant_total_rembourse
+                },
+                'pourcentages': {
+                    'taux_remboursement_global': (montant_total_rembourse / montant_total_a_rembourser * 100) if montant_total_a_rembourser > 0 else 0
+                }
+            })
+            
+        except Exception as e:
+            print(f"❌ ERREUR STATISTIQUES: {e}")
+            return Response({
+                'error': 'Erreur lors du calcul des statistiques',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 class RenflouementFilter(filters.FilterSet):
     """

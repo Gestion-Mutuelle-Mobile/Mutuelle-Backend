@@ -59,6 +59,10 @@ class ConfigurationMutuelle(models.Model):
             config = cls.objects.create()
         return config
 
+
+
+
+
 class Exercice(models.Model):
     """
     Exercice de la mutuelle (généralement 1 an)

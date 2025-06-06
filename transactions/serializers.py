@@ -59,7 +59,7 @@ class EpargneTransactionSerializer(serializers.ModelSerializer):
 
 class EmpruntSerializer(serializers.ModelSerializer):
     """
-    Serializer pour les emprunts AVEC TOUS LES CALCULS
+    Serializer pour les emprunts AVEC TOUS LES CALCULS et validations
     """
     membre_info = MembreSimpleSerializer(source='membre', read_only=True)
     session_nom = serializers.CharField(source='session_emprunt.nom', read_only=True)
@@ -81,10 +81,61 @@ class EmpruntSerializer(serializers.ModelSerializer):
             'montant_interets', 'pourcentage_rembourse', 'session_emprunt', 'session_nom',
             'date_emprunt', 'statut', 'statut_display', 'notes', 'remboursements_details'
         ]
+        extra_kwargs = {
+            'session_emprunt': {'required': False},
+            'notes': {'required': False, 'allow_blank': True},
+            'date_emprunt': {'required': False},
+            'taux_interet': {'required': False},
+            'montant_total_a_rembourser': {'required': False},
+        }
+    
+    def validate_montant_emprunte(self, value):
+        """Validation du montant d'emprunt"""
+        print(f"🔍 VALIDATION MONTANT: {value}")
+        
+        if value <= 0:
+            raise serializers.ValidationError("Le montant doit être positif")
+        
+        # Vérifier un montant maximum absolu (sécurité)
+        if value > Decimal('10000000'):  # 10 millions
+            raise serializers.ValidationError("Montant trop élevé")
+        
+        print(f"✅ Montant validé: {value}")
+        return value
+    
+    def validate_membre(self, value):
+        """Validation du membre"""
+        print(f"🔍 VALIDATION MEMBRE: {value}")
+        
+        if not value:
+            raise serializers.ValidationError("Membre requis")
+        
+        # Vérifier que le membre existe et est en règle
+        if value.statut != 'EN_REGLE':
+            raise serializers.ValidationError(f"Le membre {value.numero_membre} n'est pas en règle")
+        
+        print(f"✅ Membre validé: {value.numero_membre}")
+        return value
+    
+    def validate(self, data):
+        """Validation croisée"""
+        print(f"🔍 VALIDATION CROISÉE: {data}")
+        
+        membre = data.get('membre')
+        montant = data.get('montant_emprunte')
+        
+        return data
     
     def get_remboursements_details(self, obj):
-        remboursements = obj.remboursements.all()
-        return RemboursementSerializer(remboursements, many=True).data
+        """Détails des remboursements avec gestion d'erreurs"""
+        try:
+            remboursements = obj.remboursements.all()
+            return RemboursementSerializer(remboursements, many=True).data
+        except Exception as e:
+            print(f"❌ Erreur remboursements_details: {e}")
+            return []
+
+
 
 class RemboursementSerializer(serializers.ModelSerializer):
     """
