@@ -6,6 +6,9 @@ from django_filters import rest_framework as filters
 from django.db import models
 from django.db.models import Sum, Q, F
 from decimal import Decimal
+import logging
+from rest_framework.response import Response
+from rest_framework import status
 from .models import (
     PaiementInscription, PaiementSolidarite, EpargneTransaction,
     Emprunt, Remboursement, AssistanceAccordee, Renflouement,
@@ -614,6 +617,9 @@ class RemboursementViewSet(viewsets.ModelViewSet):
     ordering = ['-date_remboursement']
     permission_classes = [AllowAny]
 
+logger = logging.getLogger(__name__)
+
+
 class AssistanceAccordeeViewSet(viewsets.ModelViewSet):
     queryset = AssistanceAccordee.objects.select_related(
         'membre__utilisateur', 'type_assistance', 'session'
@@ -623,6 +629,45 @@ class AssistanceAccordeeViewSet(viewsets.ModelViewSet):
     search_fields = ['membre__numero_membre', 'justification', 'notes']
     ordering = ['-date_demande']
     permission_classes = [AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        print("ASSISTANCE CREATE - Data reçue:", request.data)  # Évite l'emoji pour l'encodage
+        
+        # 🔧 AUTO-AJOUTER LA SESSION COURANTE SI MANQUANTE
+        data = request.data.copy()
+        if 'session' not in data or not data['session']:
+            try:
+                from core.models import Session  # Adapte selon ton import
+                current_session = Session.objects.filter(statut='EN_COURS').first()
+                if current_session:
+                    data['session'] = current_session.id
+                    print(f"Session courante ajoutée automatiquement: {current_session.id}")
+                else:
+                    print("ERREUR: Aucune session active trouvée")
+                    return Response({
+                        'error': 'Aucune session active disponible'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                print(f"ERREUR lors de la récupération de session: {e}")
+        
+        serializer = self.get_serializer(data=data)
+        if not serializer.is_valid():
+            print("ASSISTANCE ERRORS:", serializer.errors)
+            return Response({
+                'error': 'Données invalides',
+                'details': serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            self.perform_create(serializer)
+            print("ASSISTANCE CREATED:", serializer.data)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            print(f"ASSISTANCE EXCEPTION: {str(e)}")
+            return Response({
+                'error': 'Erreur lors de la création',
+                'details': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class PaiementRenflouementViewSet(viewsets.ModelViewSet):
     queryset = PaiementRenflouement.objects.select_related(

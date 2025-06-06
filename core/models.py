@@ -313,11 +313,27 @@ class Session(models.Model):
                 )
                 self.exercice = exercice
         
+        # --- Début de la modification ---
+        # Si c'est une nouvelle session et qu'elle est "EN_COURS",
+        # marquez la session précédente (le cas échéant) comme "TERMINEE"
+        if is_new and self.statut == 'EN_COURS':
+            # Récupérer la session 'EN_COURS' pour le même exercice, si elle existe
+            # et n'est pas l'instance actuelle (au cas où elle aurait été modifiée)
+            previous_current_session = Session.objects.filter(
+                exercice=self.exercice,
+                statut='EN_COURS'
+            ).exclude(pk=self.pk).first() # Exclure l'instance actuelle si elle existe déjà
+
+            if previous_current_session:
+                previous_current_session.statut = 'TERMINEE'
+                previous_current_session.save(update_fields=['statut'])
+        # --- Fin de la modification ---
+        
         # ✅ Sauvegarder l'instance
         super().save(*args, **kwargs)
         
         # ✅ Traiter la collation seulement si le statut change vers EN_COURS
-        if self.statut == 'EN_COURS' and old_statut != 'EN_COURS':
+        if self.statut == 'EN_COURS' :
             if self.montant_collation > 0:
                 try:
                     self._traiter_collation()
@@ -427,6 +443,8 @@ class Session(models.Model):
                 raise ValidationError({
                     'statut': f'Il y a déjà une session en cours pour cet exercice: {existing.nom}'
                 })
+
+
 
 class TypeAssistance(models.Model):
     """

@@ -27,6 +27,20 @@ class PaiementInscription(models.Model):
         verbose_name = "Paiement d'inscription"
         verbose_name_plural = "Paiements d'inscription"
         ordering = ['-date_paiement']
+        
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        
+        # Alimenter le fonds social à chaque paiement d'inscription
+        if is_new:
+            from core.models import FondsSocial
+            fonds = FondsSocial.get_fonds_actuel()
+            if fonds:
+                fonds.ajouter_montant(
+                    self.montant,
+                    f"Inscription {self.membre.numero_membre} - Session {self.session.nom}"
+                )
     
     def __str__(self):
         return f"{self.membre.numero_membre} - {self.montant:,.0f} FCFA ({self.date_paiement.date()})"
@@ -292,7 +306,7 @@ class AssistanceAccordee(models.Model):
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='assistances_accordees')
     date_demande = models.DateTimeField(auto_now_add=True, verbose_name="Date de demande")
     date_paiement = models.DateTimeField(null=True, blank=True, verbose_name="Date de paiement")
-    statut = models.CharField(max_length=15, choices=STATUS_CHOICES, default='DEMANDEE', verbose_name="Statut")
+    statut = models.CharField(max_length=15, choices=STATUS_CHOICES, default='PAYEE', verbose_name="Statut")
     justification = models.TextField(verbose_name="Justification")
     notes = models.TextField(blank=True, verbose_name="Notes administratives")
     
@@ -317,7 +331,11 @@ class AssistanceAccordee(models.Model):
         super().save(*args, **kwargs)
         
         # Déclencher le processus quand le statut passe à PAYEE
-        if self.statut == 'PAYEE' and old_statut != 'PAYEE':
+        # if self.statut == 'PAYEE' and old_statut != 'PAYEE':
+        #     if not hasattr(self, '_assistance_payee_traitee'):
+        #         self._traiter_paiement_assistance()
+        #         self._assistance_payee_traitee = True
+        if True:
             if not hasattr(self, '_assistance_payee_traitee'):
                 self._traiter_paiement_assistance()
                 self._assistance_payee_traitee = True

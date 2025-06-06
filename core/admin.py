@@ -211,10 +211,8 @@ class FondsSocialAdmin(admin.ModelAdmin):
     exercice_nom.short_description = 'Exercice'
     
     def montant_total_formate(self, obj):
-        return format_html(
-            '<span style="font-size: 16px; font-weight: bold; color: green;">{:,.0f} FCFA</span>',
-            obj.montant_total
-        )
+        return str(obj.montant_total) + " FCFA"
+       
     montant_total_formate.short_description = 'Montant total'
     
     def derniers_mouvements(self, obj):
