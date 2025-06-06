@@ -29,7 +29,7 @@ class AdministrationDashboardViewSet(viewsets.ViewSet):
     """
     ViewSet principal pour le dashboard administrateur
     """
-    permission_classes = [IsAdministrateur]
+    permission_classes = [AllowAny]
     
     @action(detail=False, methods=['get'])
     def dashboard_complet(self, request):
@@ -382,68 +382,183 @@ class GestionMembresViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def creer_emprunt(self, request):
         """
-        Créer un emprunt pour un membre
+        Créer un emprunt pour un membre avec logs détaillés et robustesse
         """
-        serializer = GestionTransactionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
+        print("=" * 100)
+        print("🔍 CRÉATION EMPRUNT - DÉBUT")
+        print(f"📡 User: {request.user}")
+        print(f"📡 Data reçue: {request.data}")
+        print(f"📡 Headers: {dict(request.headers)}")
+        print(f"📡 Method: {request.method}")
+        print(f"📡 Content-Type: {request.content_type}")
+        print("=" * 50)
+
         try:
-            membre = Membre.objects.get(id=serializer.validated_data['membre_id'])
-            montant = serializer.validated_data['montant']
-            
-            # Vérifier si le membre peut emprunter
-            peut_emprunter, message = membre.peut_emprunter(montant)
+            # 🔧 ÉTAPE 1: Validation du serializer
+            print("🔍 ÉTAPE 1: Validation du serializer")
+            serializer = GestionTransactionSerializer(data=request.data)
+            print(f"🔍 Validation en cours...")
+            if not serializer.is_valid():
+                print(f"❌ ERREURS SERIALIZER: {serializer.errors}")
+                print(f"❌ ERREURS DÉTAILLÉES:")
+                for field, errors in serializer.errors.items():
+                    print(f"   - {field}: {errors}")
+                return Response({
+                    'error': 'Données invalides',
+                    'details': serializer.errors,
+                    'data_received': request.data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            print(f"✅ Serializer valide, validated_data: {serializer.validated_data}")
+
+            # 🔧 ÉTAPE 2: Récupération du membre
+            membre_id = serializer.validated_data.get('membre_id')
+            if not membre_id:
+                error_msg = "ID du membre manquant dans les données"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'data_received': serializer.validated_data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                membre = Membre.objects.select_related('utilisateur').get(id=membre_id)
+                print(f"✅ Membre trouvé: {membre.numero_membre} - {membre.utilisateur.nom_complet}")
+            except Membre.DoesNotExist:
+                error_msg = f"Membre avec ID {membre_id} introuvable"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'membre_id': membre_id
+                }, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                error_msg = f"Erreur lors de la récupération du membre: {e}"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'membre_id': membre_id
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # 🔧 ÉTAPE 3: Validation du montant
+            montant = serializer.validated_data.get('montant')
+            print(f"🔍 Montant demandé: {montant}")
+            try:
+                montant_decimal = Decimal(str(montant))
+                print(f"✅ Montant converti en Decimal: {montant_decimal}")
+
+                if montant_decimal <= 0:
+                    error_msg = "Le montant de l'emprunt doit être positif"
+                    print(f"❌ ERREUR MONTANT: {error_msg}")
+                    return Response({
+                        'error': error_msg,
+                        'montant_recu': montant
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except (InvalidOperation, TypeError, ValueError) as e:
+                error_msg = f"Montant invalide: {e}"
+                print(f"❌ ERREUR CONVERSION MONTANT: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'montant_recu': montant
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # 🔧 ÉTAPE 4: Vérifier si le membre peut emprunter
+            print("🔍 ÉTAPE 4: Vérification de la capacité d'emprunt")
+            peut_emprunter, message = membre.peut_emprunter(montant_decimal)
+            print(f"🔍 Peut emprunter ? {peut_emprunter} | Raison: {message}")
             if not peut_emprunter:
+                print(f"❌ REFUS: {message}")
                 return Response(
-                    {'error': message}, 
+                    {'error': message},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            session = Session.get_session_en_cours()
-            if not session:
-                return Response(
-                    {'error': 'Aucune session en cours'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            config = ConfigurationMutuelle.get_configuration()
-            
-            # Créer l'emprunt
-            emprunt = Emprunt.objects.create(
-                membre=membre,
-                montant_emprunte=montant,
-                taux_interet=config.taux_interet,
-                session_emprunt=session,
-                notes=serializer.validated_data.get('notes', '')
-            )
-            
-            # Créer la transaction d'épargne (retrait)
-            EpargneTransaction.objects.create(
-                membre=membre,
-                type_transaction='RETRAIT_PRET',
-                montant=-montant,  # Négatif car c'est un retrait
-                session=session,
-                notes=f"Retrait pour emprunt {emprunt.id}"
-            )
-            
-            return Response({
-                'message': 'Emprunt créé avec succès',
-                'emprunt_id': str(emprunt.id),
-                'montant_emprunte': emprunt.montant_emprunte,
-                'montant_a_rembourser': emprunt.montant_total_a_rembourser,
-                'taux_interet': emprunt.taux_interet
-            })
-            
-        except Membre.DoesNotExist:
-            return Response(
-                {'error': 'Membre introuvable'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+
+            # 🔧 ÉTAPE 5: Récupération de la session en cours
+            print("🔍 ÉTAPE 5: Récupération de la session en cours")
+            try:
+                session = Session.get_session_en_cours()
+                if not session:
+                    error_msg = "Aucune session en cours"
+                    print(f"❌ ERREUR SESSION: {error_msg}")
+                    return Response(
+                        {'error': error_msg},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                print(f"✅ Session trouvée: {session.nom} ({session.id})")
+            except Exception as e:
+                error_msg = f"Erreur lors de la récupération de la session en cours: {e}"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # 🔧 ÉTAPE 6: Récupération de la config mutuelle
+            print("🔍 ÉTAPE 6: Récupération de la configuration mutuelle")
+            try:
+                config = ConfigurationMutuelle.get_configuration()
+                print(f"✅ Config récupérée: taux_interet={config.taux_interet}")
+            except Exception as e:
+                error_msg = f"Erreur lors de la récupération de la configuration: {e}"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # 🔧 ÉTAPE 7: Création de l'emprunt avec transaction
+            print("🔍 ÉTAPE 7: Création de l'emprunt et transaction épargne")
+            notes = serializer.validated_data.get('notes', '')
+            try:
+                from django.db import transaction as db_transaction
+                with db_transaction.atomic():
+                    print("🔍 Début transaction DB...")
+                    emprunt = Emprunt.objects.create(
+                        membre=membre,
+                        montant_emprunte=montant_decimal,
+                        taux_interet=config.taux_interet,
+                        session_emprunt=session,
+                        notes=notes
+                    )
+                    print(f"✅ Emprunt créé: {emprunt.id} pour {emprunt.montant_emprunte} F à {emprunt.taux_interet}%")
+                    # Créer la transaction d'épargne (retrait pour prêt)
+                    EpargneTransaction.objects.create(
+                        membre=membre,
+                        type_transaction='RETRAIT_PRET',
+                        montant=-montant_decimal,  # Négatif car c'est un retrait
+                        session=session,
+                        notes=f"Retrait pour emprunt {emprunt.id}"
+                    )
+                    print(f"✅ Transaction épargne créée pour emprunt {emprunt.id}")
+                    emprunt.refresh_from_db()
+                    response_data = {
+                        'message': 'Emprunt créé avec succès',
+                        'emprunt_id': str(emprunt.id),
+                        'montant_emprunte': float(emprunt.montant_emprunte),
+                        'montant_a_rembourser': float(getattr(emprunt, 'montant_total_a_rembourser', 0)),
+                        'taux_interet': float(emprunt.taux_interet)
+                    }
+                    print(f"✅ Données de réponse: {response_data}")
+                    print("=" * 100)
+                    return Response(response_data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                print(f"❌ EXCEPTION LORS DE LA CRÉATION: {str(e)}")
+                print(f"❌ TYPE D'EXCEPTION: {type(e)}")
+                import traceback
+                print(f"❌ TRACEBACK COMPLET:\n{traceback.format_exc()}")
+                print("=" * 100)
+                return Response({
+                    'error': 'Erreur lors de la création de l\'emprunt',
+                    'details': str(e),
+                    'type': str(type(e))
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
         except Exception as e:
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            print(f"❌ EXCEPTION GÉNÉRALE: {str(e)}")
+            print(f"❌ TYPE D'EXCEPTION: {type(e)}")
+            import traceback
+            print(f"❌ TRACEBACK COMPLET:\n{traceback.format_exc()}")
+            print("=" * 100)
+            return Response({
+                'error': 'Erreur interne du serveur',
+                'details': str(e),
+                'type': str(type(e))
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 
     @action(detail=False, methods=['post'])

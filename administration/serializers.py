@@ -26,14 +26,41 @@ class GestionMembreSerializer(serializers.Serializer):
     details = serializers.DictField()
 
 class GestionTransactionSerializer(serializers.Serializer):
-    """
-    Serializer pour la gestion des transactions par l'admin
-    """
-    membre_id = serializers.UUIDField(required=False)
-    emprunt = serializers.UUIDField(required=False)
-    session_id = serializers.UUIDField(required=False)
-    montant = serializers.DecimalField(max_digits=12, decimal_places=2)
+    membre_id = serializers.UUIDField(required=False, allow_null=True)
+    emprunt = serializers.UUIDField(required=False, allow_null=True)
+    session_id = serializers.UUIDField(required=False, allow_null=True)
+    montant = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True)
+
+    # Champs alternatifs utilisés comme alias (non déclarés dans le serializer)
+    ALIAS_MAP = {
+        'membre_id': ['membre', 'membre_id'],
+        'session_id': ['session', 'session_id'],
+        'montant': ['montant', 'montant_emprunte', 'montant_emprunt', 'montant_paye'],
+        'notes': ['notes', 'justification', 'motif']
+        # Ajoute ici d'autres alias si besoin
+    }
+
+    def to_internal_value(self, data):
+        # Reconstruire le dict avec les bons noms
+        normalized = {}
+        errors = {}
+        for field, aliases in self.ALIAS_MAP.items():
+            value_found = None
+            for alias in aliases:
+                if alias in data:
+                    value_found = data[alias]
+                    break
+            normalized[field] = value_found
+
+        # Appel du parent avec le dict reconstruit
+        # (Garde les champs non aliasés tel quel)
+        for k, v in data.items():
+            if k not in sum(self.ALIAS_MAP.values(), []):
+                normalized[k] = v
+
+        # Utilise le validateur standard DRF
+        return super().to_internal_value(normalized)
 
 class RapportFinancierSerializer(serializers.Serializer):
     """

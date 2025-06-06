@@ -215,6 +215,8 @@ def calculer_donnees_membre_completes(membre):
         inscription_data['inscription_complete'] and
         not (solidarite_data['dette_solidarite_cumul'] > config.montant_solidarite * 0) and  # Max 0 sessions de retard
         not (renflouement_data['solde_renflouement_du'] > config.montant_solidarite * 0)  # Max 0x solidarité en renflouement
+        and  # Max 0 sessions de retard
+        not (emprunt_data['montant_restant_a_rembourser'] >  1)
     )
     
     # 7. DONNÉES CONSOLIDÉES

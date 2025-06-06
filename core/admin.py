@@ -172,9 +172,9 @@ class MembreAdmin(admin.ModelAdmin):
             donnees = obj.get_donnees_completes()
             epargne = donnees['epargne']
             return format_html(
-                '<strong>Épargne totale:</strong> {:,.0f} FCFA<br>'
-                '<strong>Intérêts reçus:</strong> {:,.0f} FCFA<br>'
-                '<strong>Épargne + Intérêts:</strong> {:,.0f} FCFA',
+                '<strong>Épargne totale:</strong> {} FCFA<br>'
+                '<strong>Intérêts reçus:</strong> {} FCFA<br>'
+                '<strong>Épargne + Intérêts:</strong> {} FCFA',
                 epargne['epargne_totale'],
                 epargne['interets_recus'],
                 epargne['epargne_plus_interets']
@@ -222,7 +222,7 @@ class FondsSocialAdmin(admin.ModelAdmin):
             color = 'green' if mouvement.type_mouvement == 'ENTREE' else 'red'
             signe = '+' if mouvement.type_mouvement == 'ENTREE' else '-'
             html += format_html(
-                '<div style="color: {};">{}{:,.0f} FCFA</div>',
+                '<div style="color: {};">{}{} FCFA</div>',
                 color, signe, mouvement.montant
             )
         return format_html(html) if html else "Aucun mouvement"
@@ -251,7 +251,7 @@ class MouvementFondsSocialAdmin(admin.ModelAdmin):
         color = 'green' if obj.type_mouvement == 'ENTREE' else 'red'
         signe = '+' if obj.type_mouvement == 'ENTREE' else '-'
         return format_html(
-            '<span style="color: {}; font-weight: bold;">{}{:,.0f} FCFA</span>',
+            '<span style="color: {}; font-weight: bold;">{}{} FCFA</span>',
             color, signe, obj.montant
         )
     montant_formate.short_description = 'Montant'

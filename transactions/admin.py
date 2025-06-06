@@ -135,12 +135,12 @@ class EpargneTransactionAdmin(admin.ModelAdmin):
     def montant_formate(self, obj):
         if obj.montant >= 0:
             return format_html(
-                '<span style="color: green;">+{:,.0f} FCFA</span>',
+                '<span style="color: green;">+{} FCFA</span>',
                 obj.montant
             )
         else:
             return format_html(
-                '<span style="color: red;">{:,.0f} FCFA</span>',
+                '<span style="color: red;">{} FCFA</span>',
                 obj.montant
             )
     montant_formate.short_description = 'Montant'
@@ -256,7 +256,7 @@ class RemboursementAdmin(admin.ModelAdmin):
     
     def montant_interet_formate(self, obj):
         return format_html(
-            '<span style="color: blue;">{:,.0f} FCFA</span>',
+            '<span style="color: blue;">{} FCFA</span>',
             obj.montant_interet
         )
     montant_interet_formate.short_description = 'Intérêt'
@@ -375,7 +375,7 @@ class RenflouementAdmin(admin.ModelAdmin):
         restant = obj.montant_restant
         if restant > 0:
             return format_html(
-                '<span style="color: red; font-weight: bold;">{:,.0f} FCFA</span>',
+                '<span style="color: red; font-weight: bold;">{} FCFA</span>',
                 restant
             )
         else:
@@ -429,6 +429,12 @@ class PaiementRenflouementAdmin(admin.ModelAdmin):
     def session_nom(self, obj):
         return obj.session.nom
     session_nom.short_description = 'Session'
+    
+    
+    
+    
+
+
 
 # Configuration de l'admin site
 admin.site.site_header = "Administration Mutuelle Enseignants ENSPY"

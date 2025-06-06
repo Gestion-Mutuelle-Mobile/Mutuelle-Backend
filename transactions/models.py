@@ -336,9 +336,11 @@ class Emprunt(models.Model):
             
             try:
                 if self.membre.calculer_statut_en_regle() :
+                    print("SAUVEGARDE DE L'EMPRUNT ON VA VOIR SI IL EST EN REGLE ET IL L'EST ")
                     self.membre.statut = 'EN_REGLE'
                     self.membre.save()
                 else:
+                    print("SAUVEGARDE DE L'EMPRUNT ON VA VOIR SI IL EST EN REGLE ET NE L'EST PAS DU TOUT ! ")
                     self.membre.statut = 'NON_EN_REGLE'
                     self.membre.save()
             except :
