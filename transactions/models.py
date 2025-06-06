@@ -7,6 +7,11 @@ from core.models import Membre, Session, Exercice, TypeAssistance
 from decimal import Decimal, ROUND_HALF_UP
 from django.db.models import Sum, Q
 from django.utils import timezone
+import uuid
+from datetime import date, timedelta
+from django.db import models
+from django.core.validators import MinValueValidator
+from django.utils import timezone
 
 class PaiementInscription(models.Model):
     """
@@ -122,6 +127,9 @@ class EpargneTransaction(models.Model):
         signe = "+" if self.montant >= 0 else ""
         return f"{self.membre.numero_membre} - {self.get_type_transaction_display()} - {signe}{self.montant:,.0f} FCFA"
 
+
+
+
 class Emprunt(models.Model):
     """
     Emprunts effectués par les membres
@@ -153,13 +161,26 @@ class Emprunt(models.Model):
     )
     session_emprunt = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='emprunts')
     date_emprunt = models.DateTimeField(auto_now_add=True, verbose_name="Date d'emprunt")
+    date_remboursement_max = models.DateField(
+        null=True, blank=True,
+        verbose_name="Date de Remboursement maximale",
+        help_text="Si non renseignée, sera automatiquement fixée à 2 mois après la date d'emprunt"
+    )
     statut = models.CharField(max_length=15, choices=STATUS_CHOICES, default='EN_COURS', verbose_name="Statut")
     notes = models.TextField(blank=True, verbose_name="Notes")
+    
+    # Champs de suivi automatique
+    date_creation = models.DateTimeField(auto_now_add=True, verbose_name="Date de création")
+    date_modification = models.DateTimeField(auto_now=True, verbose_name="Dernière modification")
     
     class Meta:
         verbose_name = "Emprunt"
         verbose_name_plural = "Emprunts"
         ordering = ['-date_emprunt']
+        indexes = [
+            models.Index(fields=['statut', 'date_remboursement_max']),
+            models.Index(fields=['membre', 'statut']),
+        ]
     
     def __str__(self):
         return f"{self.membre.numero_membre} - {self.montant_emprunte:,.0f} FCFA ({self.statut})"
@@ -167,7 +188,7 @@ class Emprunt(models.Model):
     @property
     def montant_restant_a_rembourser(self):
         """Calcule le montant restant à rembourser"""
-        return self.montant_total_a_rembourser - self.montant_rembourse
+        return max(0, self.montant_total_a_rembourser - self.montant_rembourse)
     
     @property
     def montant_interets(self):
@@ -179,19 +200,199 @@ class Emprunt(models.Model):
         """Calcule le pourcentage remboursé"""
         if self.montant_total_a_rembourser == 0:
             return 0
-        return (self.montant_rembourse / self.montant_total_a_rembourser) * 100
+        return min(100, (self.montant_rembourse / self.montant_total_a_rembourser) * 100)
+    
+    @property
+    def is_en_retard(self):
+        """Vérifie si l'emprunt est en retard"""
+        if self.statut == 'REMBOURSE':
+            return False
+        
+        if not self.date_remboursement_max:
+            return False
+            
+        today = timezone.now().date()
+        return today > self.date_remboursement_max
+    
+    @property
+    def jours_de_retard(self):
+        """Calcule le nombre de jours de retard"""
+        if not self.is_en_retard:
+            return 0
+            
+        today = timezone.now().date()
+        return (today - self.date_remboursement_max).days
+    
+    @property
+    def jours_restants(self):
+        """Calcule le nombre de jours restants avant échéance"""
+        if self.statut == 'REMBOURSE' or not self.date_remboursement_max:
+            return None
+            
+        today = timezone.now().date()
+        diff = (self.date_remboursement_max - today).days
+        return max(0, diff)
+    
+    def _calculer_date_remboursement_max_auto(self):
+        """Calcule automatiquement la date max de remboursement (2 mois après emprunt)"""
+        if self.date_emprunt:
+            date_emprunt = self.date_emprunt.date() if hasattr(self.date_emprunt, 'date') else self.date_emprunt
+            return date_emprunt + timedelta(days=60)  # 2 mois = 60 jours
+        return None
+    
+    def _calculer_montant_total_auto(self):
+        """Calcule automatiquement le montant total à rembourser"""
+        if self.montant_emprunte and self.taux_interet:
+            interet = (self.montant_emprunte * self.taux_interet) / 100
+            return self.montant_emprunte + interet
+        return self.montant_emprunte or 0
+    
+    def _determiner_statut_auto(self):
+        """Détermine automatiquement le statut basé sur les remboursements et dates"""
+        print(f"🔍 Détermination statut pour emprunt {self.id}")
+        print(f"   - Montant remboursé: {self.montant_rembourse}")
+        print(f"   - Montant total: {self.montant_total_a_rembourser}")
+        print(f"   - Date max: {self.date_remboursement_max}")
+        print(f"   - Statut actuel: {self.statut}")
+        
+        # Priorité 1: Vérifier si complètement remboursé
+        if self.montant_rembourse >= self.montant_total_a_rembourser:
+            nouveau_statut = 'REMBOURSE'
+            print(f"   ✅ Emprunt complètement remboursé -> {nouveau_statut}")
+            return nouveau_statut
+        
+        # Priorité 2: Vérifier si en retard
+        if self.is_en_retard:
+            nouveau_statut = 'EN_RETARD'
+            print(f"   ⚠️ Emprunt en retard de {self.jours_de_retard} jours -> {nouveau_statut}")
+            return nouveau_statut
+        
+        # Priorité 3: En cours par défaut
+        nouveau_statut = 'EN_COURS'
+        print(f"   🔄 Emprunt en cours normal -> {nouveau_statut}")
+        return nouveau_statut
     
     def save(self, *args, **kwargs):
-        # Calcul automatique du montant total à rembourser
-        if not self.montant_total_a_rembourser:
-            interet = (self.montant_emprunte * self.taux_interet) / 100
-            self.montant_total_a_rembourser = self.montant_emprunte + interet
+        """Sauvegarde avec calculs automatiques et vérifications de sécurité"""
+        print(f"🔍 SAVE EMPRUNT - Début pour {getattr(self, 'id', 'NOUVEAU')}")
         
-        # Vérification du statut
-        if self.montant_rembourse >= self.montant_total_a_rembourser:
-            self.statut = 'REMBOURSE'
+        try:
+            # 🔧 ÉTAPE 1: Calcul automatique du montant total si manquant
+            if not self.montant_total_a_rembourser:
+                ancien_montant = self.montant_total_a_rembourser
+                self.montant_total_a_rembourser = self._calculer_montant_total_auto()
+                print(f"   ✅ Montant total calculé: {ancien_montant} -> {self.montant_total_a_rembourser}")
+            
+            # 🔧 ÉTAPE 2: Sécurité - S'assurer que date_emprunt existe avant calculs
+            if not self.date_emprunt:
+                self.date_emprunt = timezone.now()
+                print(f"   ✅ Date emprunt auto-assignée: {self.date_emprunt}")
+            
+            # 🔧 ÉTAPE 3: Calcul automatique de la date max de remboursement si manquante
+            if not self.date_remboursement_max:
+                ancienne_date = self.date_remboursement_max
+                self.date_remboursement_max = self._calculer_date_remboursement_max_auto()
+                print(f"   ✅ Date max remboursement calculée: {ancienne_date} -> {self.date_remboursement_max}")
+            
+            # 🔧 ÉTAPE 4: Vérification de sécurité des montants
+            if self.montant_rembourse < 0:
+                print(f"   ⚠️ Correction montant remboursé négatif: {self.montant_rembourse} -> 0")
+                self.montant_rembourse = 0
+            
+            if self.montant_rembourse > self.montant_total_a_rembourser:
+                print(f"   ⚠️ Montant remboursé supérieur au total: {self.montant_rembourse} > {self.montant_total_a_rembourser}")
+                # On peut soit le plafonner, soit laisser (surpaiement)
+                # self.montant_rembourse = self.montant_total_a_rembourser
+            
+            # 🔧 ÉTAPE 5: Détermination automatique du statut
+            ancien_statut = self.statut
+            nouveau_statut = self._determiner_statut_auto()
+            
+            if ancien_statut != nouveau_statut:
+                print(f"   🔄 Changement de statut: {ancien_statut} -> {nouveau_statut}")
+                self.statut = nouveau_statut
+            
+            # 🔧 ÉTAPE 6: Validation finale avant sauvegarde
+            if self.montant_emprunte <= 0:
+                raise ValueError(f"Montant emprunté invalide: {self.montant_emprunte}")
+            
+            if self.taux_interet < 0:
+                raise ValueError(f"Taux d'intérêt invalide: {self.taux_interet}")
+            
+            # 🔧 ÉTAPE 7: Sauvegarde effective
+            print(f"   💾 Sauvegarde en cours...")
+            super().save(*args, **kwargs)
+            
+            print(f"   ✅ EMPRUNT SAUVÉ AVEC SUCCÈS:")
+            print(f"      - ID: {self.id}")
+            print(f"      - Membre: {self.membre.numero_membre if self.membre else 'N/A'}")
+            print(f"      - Montant emprunté: {self.montant_emprunte}")
+            print(f"      - Montant total: {self.montant_total_a_rembourser}")
+            print(f"      - Montant remboursé: {self.montant_rembourse}")
+            print(f"      - Date emprunt: {self.date_emprunt}")
+            print(f"      - Date max remboursement: {self.date_remboursement_max}")
+            print(f"      - Statut: {self.statut}")
+            print(f"      - En retard: {self.is_en_retard}")
+            
+            try:
+                if self.membre.calculer_statut_en_regle() :
+                    self.membre.statut = 'EN_REGLE'
+                    self.membre.save()
+                else:
+                    self.membre.statut = 'NON_EN_REGLE'
+                    self.membre.save()
+            except :
+                print(f"Erreur de calcul de sttus en regle  ")
+                pass
+        except Exception as e:
+            print(f"   ❌ ERREUR LORS DE LA SAUVEGARDE: {e}")
+            print(f"   ❌ Type d'erreur: {type(e)}")
+            import traceback
+            print(f"   ❌ Traceback: {traceback.format_exc()}")
+            raise
+    
+    @classmethod
+    def verifier_retards_globaux(cls):
+        """Méthode utilitaire pour vérifier tous les emprunts en retard"""
+        print("🔍 VÉRIFICATION GLOBALE DES RETARDS")
         
-        super().save(*args, **kwargs)
+        emprunts_actifs = cls.objects.filter(statut__in=['EN_COURS', 'EN_RETARD'])
+        emprunts_modifies = 0
+        
+        for emprunt in emprunts_actifs:
+            ancien_statut = emprunt.statut
+            # Re-déclencher la logique de save sans modifier les données
+            emprunt.save()
+            
+            if ancien_statut != emprunt.statut:
+                emprunts_modifies += 1
+                print(f"   🔄 Emprunt {emprunt.id}: {ancien_statut} -> {emprunt.statut}")
+        
+        print(f"   ✅ Vérification terminée: {emprunts_modifies} emprunts mis à jour")
+        return emprunts_modifies
+    
+    def clean(self):
+        """Validation Django pour l'admin"""
+        from django.core.exceptions import ValidationError
+        
+        if self.montant_emprunte and self.montant_emprunte <= 0:
+            raise ValidationError({'montant_emprunte': 'Le montant emprunté doit être positif'})
+        
+        if self.taux_interet and self.taux_interet < 0:
+            raise ValidationError({'taux_interet': 'Le taux d\'intérêt ne peut pas être négatif'})
+        
+        if self.montant_rembourse and self.montant_rembourse < 0:
+            raise ValidationError({'montant_rembourse': 'Le montant remboursé ne peut pas être négatif'})
+        
+        if self.date_remboursement_max and self.date_emprunt:
+            date_emprunt = self.date_emprunt.date() if hasattr(self.date_emprunt, 'date') else self.date_emprunt
+            if self.date_remboursement_max <= date_emprunt:
+                raise ValidationError({
+                    'date_remboursement_max': 'La date de remboursement maximale doit être postérieure à la date d\'emprunt'
+                })
+
+
+
 
 class Remboursement(models.Model):
     """
@@ -425,7 +626,15 @@ class AssistanceAccordee(models.Model):
                 cause=f"Assistance {self.type_assistance.nom} pour {self.membre.numero_membre}",
                 type_cause='ASSISTANCE'
             )
+            
             renflouements_crees += 1
+            try:
+                membre.statut='NON_EN_REGLE'
+                membre.save()
+            except Exception as e:
+                print(f"Echec de la MAJ du statut du membre : {e}")
+                
+                pass
         
         print(f"Renflouement créé: {renflouements_crees} membres - {montant_par_membre:,.0f} FCFA chacun")
 

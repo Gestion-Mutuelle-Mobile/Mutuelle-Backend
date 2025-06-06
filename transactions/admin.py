@@ -222,7 +222,7 @@ class EmpruntAdmin(admin.ModelAdmin):
         return format_html(
             '<div style="width: 100px; background-color: #f0f0f0; border-radius: 3px;">'
             '<div style="width: {}%; background-color: {}; height: 20px; border-radius: 3px; text-align: center; color: white; font-size: 12px; line-height: 20px;">'
-            '{:.0f}%</div></div>',
+            '{}%</div></div>',
             min(pourcentage, 100), color, pourcentage
         )
     progression.short_description = 'Progression'

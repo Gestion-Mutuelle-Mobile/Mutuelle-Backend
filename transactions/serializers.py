@@ -70,6 +70,11 @@ class EmpruntSerializer(serializers.ModelSerializer):
     montant_interets = serializers.ReadOnlyField()
     pourcentage_rembourse = serializers.ReadOnlyField()
     
+    # Nouveaux champs calculés
+    is_en_retard = serializers.ReadOnlyField()
+    jours_de_retard = serializers.ReadOnlyField()
+    jours_restants = serializers.ReadOnlyField()
+    
     # Détails des remboursements
     remboursements_details = serializers.SerializerMethodField()
     
@@ -79,7 +84,7 @@ class EmpruntSerializer(serializers.ModelSerializer):
             'id', 'membre', 'membre_info', 'montant_emprunte', 'taux_interet',
             'montant_total_a_rembourser', 'montant_rembourse', 'montant_restant_a_rembourser',
             'montant_interets', 'pourcentage_rembourse', 'session_emprunt', 'session_nom',
-            'date_emprunt', 'statut', 'statut_display', 'notes', 'remboursements_details'
+            'date_emprunt', 'statut', 'statut_display', 'notes', 'remboursements_details','is_en_retard', 'jours_de_retard', 'jours_restants'
         ]
         extra_kwargs = {
             'session_emprunt': {'required': False},
@@ -87,6 +92,8 @@ class EmpruntSerializer(serializers.ModelSerializer):
             'date_emprunt': {'required': False},
             'taux_interet': {'required': False},
             'montant_total_a_rembourser': {'required': False},
+            'date_remboursement_max': {'required': False},  # 🔧 AJOUTÉ
+
         }
     
     def validate_montant_emprunte(self, value):
