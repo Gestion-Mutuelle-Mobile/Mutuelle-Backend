@@ -213,8 +213,8 @@ def calculer_donnees_membre_completes(membre):
     # et s'il n'a pas de retard critique sur les autres obligations
     en_regle = (
         inscription_data['inscription_complete'] and
-        not (solidarite_data['dette_solidarite_cumul'] > config.montant_solidarite * 3) and  # Max 3 sessions de retard
-        not (renflouement_data['solde_renflouement_du'] > config.montant_solidarite * 2)  # Max 2x solidarité en renflouement
+        not (solidarite_data['dette_solidarite_cumul'] > config.montant_solidarite * 0) and  # Max 0 sessions de retard
+        not (renflouement_data['solde_renflouement_du'] > config.montant_solidarite * 0)  # Max 0x solidarité en renflouement
     )
     
     # 7. DONNÉES CONSOLIDÉES

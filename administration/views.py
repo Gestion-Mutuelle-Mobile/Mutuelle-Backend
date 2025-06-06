@@ -245,8 +245,15 @@ class GestionMembresViewSet(viewsets.ViewSet):
             ).aggregate(total=Sum('montant'))['total'] or Decimal('0')
             
             if total_paye >= config.montant_inscription and membre.statut != 'EN_REGLE':
-                membre.statut = 'EN_REGLE'
-                membre.save()
+                
+                try:
+                    if membre.calculer_statut_en_regle() :
+                        membre.statut = 'EN_REGLE'
+                        membre.save()
+                except e :
+                    print(f"Erreur de calcul de sttus en regle : {e} ")
+                    pass
+                print("MEMEBRE EN REGLE POUR INSCRIPTION")
             
             return Response({
                 'message': 'Paiement inscription ajouté avec succès',
