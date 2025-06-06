@@ -29,8 +29,8 @@ class GestionTransactionSerializer(serializers.Serializer):
     """
     Serializer pour la gestion des transactions par l'admin
     """
-    membre_id = serializers.UUIDField()
-    emprunt_id = serializers.UUIDField(required=False)
+    membre_id = serializers.UUIDField(required=False)
+    emprunt = serializers.UUIDField(required=False)
     session_id = serializers.UUIDField(required=False)
     montant = serializers.DecimalField(max_digits=12, decimal_places=2)
     notes = serializers.CharField(required=False, allow_blank=True)

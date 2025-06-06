@@ -16,6 +16,7 @@ from transactions.models import (
     Emprunt, Remboursement, AssistanceAccordee, Renflouement,
     PaiementRenflouement
 )
+from decimal import Decimal, InvalidOperation
 from .serializers import (
     CreerMembreCompletSerializer, DashboardAdministrateurSerializer, GestionMembreSerializer,
     GestionTransactionSerializer, RapportFinancierSerializer,
@@ -444,65 +445,285 @@ class GestionMembresViewSet(viewsets.ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+
     @action(detail=False, methods=['post'])
     def ajouter_remboursement(self, request):
         """
         Ajouter un remboursement pour un emprunt
         """
-        serializer = GestionTransactionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        print("=" * 100)
+        print("🔍 AJOUT REMBOURSEMENT - DÉBUT")
+        print(f"📡 User: {request.user}")
+        print(f"📡 Data reçue: {request.data}")
+        print(f"📡 Headers: {dict(request.headers)}")
+        print(f"📡 Method: {request.method}")
+        print(f"📡 Content-Type: {request.content_type}")
+        print("=" * 50)
         
         try:
-            emprunt = Emprunt.objects.get(id=serializer.validated_data['emprunt_id'])
+            # 🔧 ÉTAPE 1: Validation du serializer
+            print("🔍 ÉTAPE 1: Validation du serializer")
+            serializer = GestionTransactionSerializer(data=request.data)
+            
+            print(f"🔍 Validation en cours...")
+            if not serializer.is_valid():
+                print(f"❌ ERREURS SERIALIZER: {serializer.errors}")
+                print(f"❌ ERREURS DÉTAILLÉES:")
+                for field, errors in serializer.errors.items():
+                    print(f"   - {field}: {errors}")
+                
+                return Response({
+                    'error': 'Données invalides',
+                    'details': serializer.errors,
+                    'data_received': request.data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            print(f"✅ Serializer valide, validated_data: {serializer.validated_data}")
+            
+            # 🔧 ÉTAPE 2: Récupération de l'emprunt
+            print("🔍 ÉTAPE 2: Récupération de l'emprunt")
+            emprunt_id = serializer.validated_data.get('emprunt')
+            print(f"🔍 Recherche emprunt avec ID: {emprunt_id}")
+            
+            if not emprunt_id:
+                error_msg = "ID de l'emprunt manquant dans les données"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'data_received': serializer.validated_data
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            try:
+                emprunt = Emprunt.objects.select_related('membre__utilisateur', 'session_emprunt').get(id=emprunt_id)
+                print(f"✅ Emprunt trouvé:")
+                print(f"   - ID: {emprunt.id}")
+                print(f"   - Membre: {emprunt.membre.numero_membre} - {emprunt.membre.utilisateur.nom_complet}")
+                print(f"   - Montant emprunté: {emprunt.montant_emprunte}")
+                print(f"   - Montant total à rembourser: {emprunt.montant_total_a_rembourser}")
+                print(f"   - Montant déjà remboursé: {emprunt.montant_rembourse}")
+                print(f"   - Montant restant: {emprunt.montant_restant_a_rembourser}")
+                print(f"   - Statut: {emprunt.statut}")
+                print(f"   - Session: {emprunt.session_emprunt.nom}")
+                print(f"   - Date emprunt: {emprunt.date_emprunt}")
+                print(f"   - Date max remboursement: {getattr(emprunt, 'date_remboursement_max', 'N/A')}")
+                
+            except Emprunt.DoesNotExist:
+                error_msg = f"Emprunt avec ID {emprunt_id} introuvable"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'emprunt_id': emprunt_id
+                }, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                error_msg = f"Erreur lors de la récupération de l'emprunt: {e}"
+                print(f"❌ ERREUR: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'emprunt_id': emprunt_id
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # 🔧 ÉTAPE 3: Validation du statut de l'emprunt
+            print("🔍 ÉTAPE 3: Validation du statut de l'emprunt")
+            print(f"🔍 Statut actuel: {emprunt.statut}")
+            
+            if emprunt.statut not in ['EN_COURS', 'EN_RETARD']:
+                error_msg = f"Cet emprunt n'est pas remboursable (statut: {emprunt.statut})"
+                print(f"❌ ERREUR STATUT: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'statut_actuel': emprunt.statut,
+                    'statuts_autorises': ['EN_COURS', 'EN_RETARD']
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            print(f"✅ Statut valide pour remboursement: {emprunt.statut}")
+            
+            # 🔧 ÉTAPE 4: Validation du montant
+            print("🔍 ÉTAPE 4: Validation du montant")
             montant = serializer.validated_data['montant']
+            print(f"🔍 Montant demandé: {montant}")
+            print(f"🔍 Montant restant à rembourser: {emprunt.montant_restant_a_rembourser}")
             
-            if emprunt.statut != 'EN_COURS':
-                return Response(
-                    {'error': 'Cet emprunt n\'est pas en cours'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            try:
+                montant_decimal = Decimal(str(montant))
+                print(f"✅ Montant converti en Decimal: {montant_decimal}")
+                
+                if montant_decimal <= 0:
+                    error_msg = "Le montant du remboursement doit être positif"
+                    print(f"❌ ERREUR MONTANT: {error_msg}")
+                    return Response({
+                        'error': error_msg,
+                        'montant_recu': montant
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Vérification du montant restant
+                montant_restant = emprunt.montant_restant_a_rembourser
+                if montant_decimal > montant_restant:
+                    error_msg = f'Montant trop élevé. Restant à rembourser: {montant_restant}'
+                    print(f"❌ ERREUR MONTANT TROP ÉLEVÉ: {error_msg}")
+                    return Response({
+                        'error': error_msg,
+                        'montant_demande': float(montant_decimal),
+                        'montant_restant': float(montant_restant),
+                        'montant_max_autorise': float(montant_restant)
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                print(f"✅ Montant validé: {montant_decimal}")
+                
+            except (InvalidOperation, TypeError, ValueError) as e:
+                error_msg = f"Montant invalide: {e}"
+                print(f"❌ ERREUR CONVERSION MONTANT: {error_msg}")
+                return Response({
+                    'error': error_msg,
+                    'montant_recu': montant
+                }, status=status.HTTP_400_BAD_REQUEST)
             
-            if montant > emprunt.montant_restant_a_rembourser:
-                return Response(
-                    {'error': f'Montant trop élevé. Restant: {emprunt.montant_restant_a_rembourser}'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # 🔧 ÉTAPE 5: Récupération de la session
+            print("🔍 ÉTAPE 5: Récupération de la session")
             
-            session = Session.get_session_en_cours()
-            if not session:
-                return Response(
-                    {'error': 'Aucune session en cours'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            try:
+                session = Session.get_session_en_cours()
+                if not session:
+                    error_msg = "Aucune session en cours disponible"
+                    print(f"❌ ERREUR SESSION: {error_msg}")
+                    return Response({
+                        'error': error_msg
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                print(f"✅ Session trouvée:")
+                print(f"   - ID: {session.id}")
+                print(f"   - Nom: {session.nom}")
+                print(f"   - Statut: {session.statut}")
+                print(f"   - Date début: {session.date_creation}")
+                
+            except Exception as e:
+                error_msg = f"Erreur lors de la récupération de la session: {e}"
+                print(f"❌ ERREUR SESSION: {error_msg}")
+                return Response({
+                    'error': error_msg
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             
-            # Créer le remboursement
-            remboursement = Remboursement.objects.create(
-                emprunt=emprunt,
-                montant=montant,
-                session=session,
-                notes=serializer.validated_data.get('notes', '')
-            )
+            # 🔧 ÉTAPE 6: Vérification des remboursements existants
+            print("🔍 ÉTAPE 6: Vérification des remboursements existants")
+            
+            try:
+                remboursements_existants = Remboursement.objects.filter(emprunt=emprunt)
+                print(f"🔍 Nombre de remboursements existants: {remboursements_existants.count()}")
+                
+                if remboursements_existants.exists():
+                    print("🔍 Remboursements existants:")
+                    for i, remb in enumerate(remboursements_existants[:5], 1):  # Afficher max 5
+                        print(f"   {i}. ID: {remb.id} - Montant: {remb.montant} - Date: {remb.date_remboursement}")
+                    
+                    if remboursements_existants.count() > 5:
+                        print(f"   ... et {remboursements_existants.count() - 5} autres")
+                else:
+                    print("   Aucun remboursement existant")
+                    
+            except Exception as e:
+                print(f"⚠️ Erreur lors de la vérification des remboursements existants: {e}")
+            
+            # 🔧 ÉTAPE 7: Préparation des données pour création
+            print("🔍 ÉTAPE 7: Préparation des données pour création")
+            
+            notes = serializer.validated_data.get('notes', '')
+            print(f"🔍 Notes: '{notes}'")
+            
+            creation_data = {
+                'emprunt': emprunt,
+                'montant': montant_decimal,
+                'session': session,
+                'notes': notes
+            }
+            print(f"🔍 Données de création: {creation_data}")
+            
+            # 🔧 ÉTAPE 8: Création du remboursement avec transaction
+            print("🔍 ÉTAPE 8: Création du remboursement")
+            
+            try:
+                from django.db import transaction as db_transaction
+                
+                with db_transaction.atomic():
+                    print("🔍 Début de la transaction...")
+                    
+                    # Sauvegarder l'état avant modification
+                    ancien_montant_rembourse = emprunt.montant_rembourse
+                    ancien_statut = emprunt.statut
+                    
+                    print(f"🔍 État avant création:")
+                    print(f"   - Ancien montant remboursé: {ancien_montant_rembourse}")
+                    print(f"   - Ancien statut: {ancien_statut}")
+                    
+                    # Créer le remboursement
+                    print("🔍 Création de l'instance Remboursement...")
+                    remboursement = Remboursement.objects.create(**creation_data)
+                    
+                    print(f"✅ Remboursement créé:")
+                    print(f"   - ID: {remboursement.id}")
+                    print(f"   - Montant total: {remboursement.montant}")
+                    print(f"   - Montant capital: {getattr(remboursement, 'montant_capital', 'N/A')}")
+                    print(f"   - Montant intérêt: {getattr(remboursement, 'montant_interet', 'N/A')}")
+                    print(f"   - Date: {remboursement.date_remboursement}")
+                    print(f"   - Session: {remboursement.session.nom}")
+                    print(f"   - Notes: '{remboursement.notes}'")
+                    
+                    # Recharger l'emprunt pour voir les modifications
+                    print("🔍 Rechargement de l'emprunt...")
+                    emprunt.refresh_from_db()
+                    
+                    print(f"✅ État après création:")
+                    print(f"   - Nouveau montant remboursé: {emprunt.montant_rembourse}")
+                    print(f"   - Nouveau montant restant: {emprunt.montant_restant_a_rembourser}")
+                    print(f"   - Nouveau statut: {emprunt.statut}")
+                    print(f"   - Pourcentage remboursé: {emprunt.pourcentage_rembourse:.2f}%")
+                    
+                    # Préparer la réponse
+                    response_data = {
+                        'message': 'Remboursement ajouté avec succès',
+                        'remboursement_id': str(remboursement.id),
+                        'montant_rembourse': float(remboursement.montant),
+                        'montant_capital': float(getattr(remboursement, 'montant_capital', 0)),
+                        'montant_interet': float(getattr(remboursement, 'montant_interet', 0)),
+                        'nouveau_solde': float(emprunt.montant_restant_a_rembourser),
+                        'nouveau_statut': emprunt.statut,
+                        'pourcentage_rembourse': float(emprunt.pourcentage_rembourse),
+                        'emprunt_complete': emprunt.statut == 'REMBOURSE'
+                    }
+                    
+                    print(f"✅ REMBOURSEMENT CRÉÉ AVEC SUCCÈS")
+                    print(f"✅ Données de réponse: {response_data}")
+                    print("=" * 100)
+                    
+                    return Response(response_data, status=status.HTTP_201_CREATED)
+                    
+            except Exception as e:
+                print(f"❌ EXCEPTION LORS DE LA CRÉATION: {str(e)}")
+                print(f"❌ TYPE D'EXCEPTION: {type(e)}")
+                import traceback
+                print(f"❌ TRACEBACK COMPLET:")
+                print(traceback.format_exc())
+                print("=" * 100)
+                
+                return Response({
+                    'error': 'Erreur lors de la création du remboursement',
+                    'details': str(e),
+                    'type': str(type(e))
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+        except Exception as e:
+            print(f"❌ EXCEPTION GÉNÉRALE: {str(e)}")
+            print(f"❌ TYPE D'EXCEPTION: {type(e)}")
+            import traceback
+            print(f"❌ TRACEBACK COMPLET:")
+            print(traceback.format_exc())
+            print("=" * 100)
             
             return Response({
-                'message': 'Remboursement ajouté avec succès',
-                'remboursement_id': str(remboursement.id),
-                'montant_rembourse': remboursement.montant,
-                'montant_capital': remboursement.montant_capital,
-                'montant_interet': remboursement.montant_interet,
-                'nouveau_solde': emprunt.montant_restant_a_rembourser
-            })
-            
-        except Emprunt.DoesNotExist:
-            return Response(
-                {'error': 'Emprunt introuvable'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-        except Exception as e:
-            return Response(
-                {'error': str(e)}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+                'error': 'Erreur interne du serveur',
+                'details': str(e),
+                'type': str(type(e))
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+   
     # Ajouter cette méthode dans la classe GestionMembresViewSet
 
     @action(detail=False, methods=['post'])
