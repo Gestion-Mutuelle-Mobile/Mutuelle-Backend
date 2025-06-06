@@ -10,9 +10,15 @@ import logging
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import models, transaction
+import logging
+from rest_framework.response import Response
+from rest_framework import status
+
+logger = logging.getLogger(__name__)
 
 
-from core.models import Membre, TypeAssistance
+
+from core.models import Membre, Session, TypeAssistance
 from .models import (
     PaiementInscription, PaiementSolidarite, EpargneTransaction,
     Emprunt, Remboursement, AssistanceAccordee, Renflouement,
@@ -717,3 +723,112 @@ class PaiementRenflouementViewSet(viewsets.ModelViewSet):
     search_fields = ['renflouement__membre__numero_membre', 'notes']
     ordering = ['-date_paiement']
     permission_classes = [AllowAny]
+
+    def create(self, request, *args, **kwargs):
+        print("=" * 60)
+        print("🔍 PAIEMENT RENFLOUEMENT CREATE")
+        print(f"📡 Data reçue: {request.data}")
+        print(f"👤 User: {request.user}")
+        print(f"🔗 Headers: {dict(request.headers)}")
+        
+        # 🔍 VÉRIFICATION DES FOREIGN KEYS AVANT CRÉATION
+        data = request.data.copy()
+        
+        try:
+            # Vérifier le renflouement
+            if 'renflouement' in data:
+                print(f"🔍 Vérification renflouement ID: {data.get('renflouement')}")
+                renflouement = Renflouement.objects.get(id=data.get('renflouement'))
+                print(f"✅ Renflouement trouvé: {renflouement}")
+                print(f"   - Membre: {renflouement.membre.numero_membre}")
+                print(f"   - Montant dû: {renflouement.montant_du}")
+                print(f"   - Cause: {renflouement.cause}")
+            
+            # Vérifier la session
+            if 'session' in data:
+                print(f"🔍 Vérification session ID: {data.get('session')}")
+                session = Session.objects.get(id=data.get('session'))
+                print(f"✅ Session trouvée: {session}")
+            elif not data.get('session'):
+                # Auto-assigner la session courante si manquante
+                current_session = Session.objects.filter(statut="EN_COURS").first()
+                if current_session:
+                    data['session'] = current_session.id
+                    print(f"✅ Session auto-assignée: {current_session.nom}")
+                else:
+                    print("❌ Aucune session active trouvée")
+                    return Response({
+                        'error': 'Aucune session active disponible'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Vérifier le montant
+            montant = data.get('montant')
+            print(f"🔍 Montant: {montant} (type: {type(montant)})")
+            if montant:
+                try:
+                    montant_decimal = Decimal(str(montant))
+                    print(f"✅ Montant converti: {montant_decimal}")
+                except Exception as e:
+                    print(f"❌ Erreur conversion montant: {e}")
+                    return Response({
+                        'error': f'Montant invalide: {e}'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as e:
+            print(f"❌ ERREUR Foreign Key: {e}")
+            print(f"❌ Type erreur: {type(e)}")
+            import traceback
+            print(f"❌ Traceback: {traceback.format_exc()}")
+            return Response({
+                'error': f'Objet non trouvé: {str(e)}'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 🔍 VALIDATION AVEC SERIALIZER
+        print(f"🔍 Data finale envoyée au serializer: {data}")
+        serializer = self.get_serializer(data=data)
+        
+        print(f"🔍 Validation du serializer...")
+        if not serializer.is_valid():
+            print(f"❌ ERREURS SERIALIZER: {serializer.errors}")
+            print(f"❌ ERREURS DÉTAILLÉES:")
+            for field, errors in serializer.errors.items():
+                print(f"   - {field}: {errors}")
+            
+            return Response({
+                'error': 'Données invalides',
+                'details': serializer.errors,
+                'data_received': data
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        print(f"✅ Serializer valide, validated_data: {serializer.validated_data}")
+        
+        # 🔍 CRÉATION
+        try:
+            print("🔍 Début de la création...")
+            
+            # Utiliser une transaction pour isoler l'erreur
+            from django.db import transaction
+            with transaction.atomic():
+                print("🔍 Appel perform_create...")
+                self.perform_create(serializer)
+                print(f"✅ PaiementRenflouement créé avec succès")
+                
+            print("✅ PAIEMENT RENFLOUEMENT CREATED:")
+            print(f"   Data: {serializer.data}")
+            print("=" * 60)
+            
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            print(f"❌ EXCEPTION CRÉATION: {str(e)}")
+            print(f"❌ EXCEPTION TYPE: {type(e)}")
+            import traceback
+            print(f"❌ TRACEBACK COMPLET:")
+            print(traceback.format_exc())
+            print("=" * 60)
+            
+            return Response({
+                'error': 'Erreur lors de la création',
+                'details': str(e),
+                'type': str(type(e))
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

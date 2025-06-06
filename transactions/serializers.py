@@ -6,7 +6,13 @@ from .models import (
     Emprunt, Remboursement, AssistanceAccordee, Renflouement,
     PaiementRenflouement
 )
+
 from core.serializers import MembreSimpleSerializer, SessionSerializer, TypeAssistanceSerializer
+import logging
+from rest_framework.response import Response
+from rest_framework import status
+
+logger = logging.getLogger(__name__)
 
 class PaiementInscriptionSerializer(serializers.ModelSerializer):
     """
@@ -171,6 +177,7 @@ class PaiementRenflouementSerializer(serializers.ModelSerializer):
             'montant_total_du': obj.renflouement.montant_du,
             'cause': obj.renflouement.cause
         }
+
 
 class StatistiquesTransactionsSerializer(serializers.Serializer):
     """
